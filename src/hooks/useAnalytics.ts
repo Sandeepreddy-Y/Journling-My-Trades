@@ -1,11 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '@/lib/axios';
-import {
-  MOCK_EQUITY_CURVE,
-  MOCK_MONTHLY_PERFORMANCE,
-  MOCK_SESSION_PERFORMANCE,
-  MOCK_TOP_SETUPS,
-} from '@/lib/dummyData';
 
 export interface AnalyticsData {
   overview: {
@@ -36,8 +30,37 @@ export interface AnalyticsData {
   dailyReturns: Array<{ date: string; pnl: number; tradeCount: number }>;
 }
 
+const DEFAULT_ZERO_ANALYTICS: AnalyticsData = {
+  overview: {
+    totalPnl: 0,
+    totalTrades: 0,
+    winCount: 0,
+    lossCount: 0,
+    breakevenCount: 0,
+    winRate: 0,
+    profitFactor: 0,
+    averageRrr: 0,
+    averageWin: 0,
+    averageLoss: 0,
+    expectancy: 0,
+    maxDrawdown: 0,
+    maxDrawdownPercent: 0,
+    consecutiveWins: 0,
+    consecutiveLosses: 0,
+    bestSetup: 'N/A',
+    worstSetup: 'N/A',
+    bestSession: 'N/A',
+    worstSession: 'N/A',
+  },
+  equityCurve: [],
+  monthlyReturns: [],
+  sessionPerformance: [],
+  topSetups: [],
+  dailyReturns: [],
+};
+
 export function useAnalytics() {
-  const [data, setData] = useState<AnalyticsData | null>(null);
+  const [data, setData] = useState<AnalyticsData>(DEFAULT_ZERO_ANALYTICS);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,35 +78,8 @@ export function useAnalytics() {
       setError(err.message || 'Failed to fetch analytics');
     }
 
-    // Fallback Mock
-    setData({
-      overview: {
-        totalPnl: 14850.25,
-        totalTrades: 128,
-        winCount: 83,
-        lossCount: 38,
-        breakevenCount: 7,
-        winRate: 64.8,
-        profitFactor: 2.15,
-        averageRrr: 2.35,
-        averageWin: 420.50,
-        averageLoss: 210.30,
-        expectancy: 202.82,
-        maxDrawdown: 1250.00,
-        maxDrawdownPercent: 2.4,
-        consecutiveWins: 9,
-        consecutiveLosses: 3,
-        bestSetup: 'Liquidity Grab + FVG',
-        worstSetup: 'Impulse Breakout',
-        bestSession: 'London Session',
-        worstSession: 'Sydney Session',
-      },
-      equityCurve: MOCK_EQUITY_CURVE,
-      monthlyReturns: MOCK_MONTHLY_PERFORMANCE.map((m) => ({ ...m, tradesCount: 15 })),
-      sessionPerformance: MOCK_SESSION_PERFORMANCE,
-      topSetups: MOCK_TOP_SETUPS,
-      dailyReturns: [],
-    });
+    // Default zero state for fresh personal accounts
+    setData(DEFAULT_ZERO_ANALYTICS);
     setIsLoading(false);
   }, []);
 
