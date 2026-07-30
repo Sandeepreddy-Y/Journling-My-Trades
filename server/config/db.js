@@ -1,5 +1,4 @@
 const { Pool } = require('pg');
-const bcrypt = require('bcryptjs');
 
 // ── PostgreSQL Pool Configuration ──
 let pool = null;
@@ -21,29 +20,14 @@ if (process.env.DATABASE_URL) {
   });
 }
 
-// ── In-Memory Store (Fallback if DATABASE_URL is not set) ──
+// ── In-Memory Store (Isolated Multi-User Local Store) ──
 const memoryDb = {
-  users: [
-    {
-      id: 'demo-user-id-101',
-      email: 'trader@example.com',
-      password_hash: '$2a$10$w8T0oW1L4Y3M7q6K6P3Lueg5n/R7g8B7i1v0j2k3l4m5n6o7p8q9r', // demo password hash
-      display_name: 'Alex Rivera',
-      avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=250&q=80',
-      role: 'trader',
-      theme_preference: 'dark',
-      created_at: new Date().toISOString(),
-    },
-  ],
+  users: [],
+  trades: [],
   sessions: [],
+  uploads: [],
+  journals: [],
 };
-
-// Seed demo password 'Password123!'
-bcrypt.hash('Password123!', 10).then((hash) => {
-  if (memoryDb.users[0]) {
-    memoryDb.users[0].password_hash = hash;
-  }
-});
 
 module.exports = {
   query: async (text, params) => {

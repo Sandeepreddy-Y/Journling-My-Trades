@@ -127,10 +127,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.getItem('refreshToken') || sessionStorage.getItem('refreshToken');
     api.post('/auth/logout', { refreshToken }).catch(() => {});
 
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-    sessionStorage.removeItem('accessToken');
-    sessionStorage.removeItem('refreshToken');
+    localStorage.clear();
+    sessionStorage.clear();
 
     setState({
       user: null,
@@ -138,6 +136,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: false,
       isLoading: false,
     });
+
+    window.location.href = '/auth/login';
   };
 
   // ── Update Local User Profile ──

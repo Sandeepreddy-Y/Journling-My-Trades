@@ -1,55 +1,45 @@
 const { query, memoryDb, pool } = require('../config/db');
 
-/**
- * Calculate PnL, Risk:Reward Ratio, Risk Amount, Reward Amount, and Outcome metrics
- */
-const calculateMetrics = (trade) => {
-  const { direction, entryPrice, exitPrice, stopLoss, takeProfit, lotSize, fees = 0, swap = 0 } = trade;
+// Helper to compute PnL, Outcome, Risk:Reward
+const calculateTradeMetrics = (data) => {
+  const entry = parseFloat(data.entryPrice) || 0;
+  const exit = parseFloat(data.exitPrice) || null;
+  const sl = parseFloat(data.stopLoss) || null;
+  const tp = parseFloat(data.takeProfit) || null;
+  const lots = parseFloat(data.lotSize) || 0;
+  const direction = (data.direction || 'long').toLowerCase();
 
-  const entry = parseFloat(entryPrice) || 0;
-  const exit = exitPrice !== null && exitPrice !== undefined && exitPrice !== '' ? parseFloat(exitPrice) : null;
-  const sl = stopLoss !== null && stopLoss !== undefined && stopLoss !== '' ? parseFloat(stopLoss) : null;
-  const tp = takeProfit !== null && takeProfit !== undefined && takeProfit !== '' ? parseFloat(takeProfit) : null;
-  const lots = parseFloat(lotSize) || 1;
-  const comm = (parseFloat(fees) || 0) + (parseFloat(swap) || 0);
+  let pnl = parseFloat(data.pnl) || 0;
+  let outcome = data.outcome || 'open';
 
-  let pnl = null;
-  let outcome = 'open';
   let riskAmount = null;
   let rewardAmount = null;
   let riskReward = null;
 
-  const dir = String(direction).toLowerCase();
-  const isBuy = dir === 'long' || dir === 'buy';
-
-  // Calculate Risk & Reward Amounts
-  if (sl && entry) {
+  if (entry > 0 && sl > 0) {
     riskAmount = Math.abs(entry - sl) * lots * 100;
   }
-
-  if (tp && entry) {
+  if (entry > 0 && tp > 0) {
     rewardAmount = Math.abs(tp - entry) * lots * 100;
   }
-
   if (riskAmount && rewardAmount && riskAmount > 0) {
     riskReward = parseFloat((rewardAmount / riskAmount).toFixed(2));
   }
 
-  // Calculate Gross & Net PnL if position is closed
-  if (exit !== null && !isNaN(exit)) {
-    let grossPnl = 0;
-    if (isBuy) {
-      grossPnl = (exit - entry) * lots * 100;
-    } else {
-      grossPnl = (entry - exit) * lots * 100;
-    }
+  if (exit !== null && exit > 0 && entry > 0 && pnl === 0) {
+    const isLong = direction === 'long' || direction === 'buy';
+    const priceDiff = isLong ? exit - entry : entry - exit;
+    pnl = priceDiff * lots * 100;
 
-    pnl = parseFloat((grossPnl - comm).toFixed(2));
+    if (data.fees) pnl -= parseFloat(data.fees);
+    if (data.swap) pnl += parseFloat(data.swap);
 
-    if (pnl > 0) outcome = 'win';
-    else if (pnl < 0) outcome = 'loss';
-    else outcome = 'breakeven';
+    pnl = parseFloat(pnl.toFixed(2));
   }
+
+  if (pnl > 0) outcome = 'win';
+  else if (pnl < 0) outcome = 'loss';
+  else if (exit !== null) outcome = 'breakeven';
 
   return {
     pnl,
@@ -65,7 +55,7 @@ const calculateMetrics = (trade) => {
  */
 const validateTradeInput = (data) => {
   const errors = [];
-  const { symbol, direction, entryPrice, lotSize, stopLoss, takeProfit, exitPrice } = data;
+  const { symbol, direction, entryPrice, lotSize } = data;
 
   if (!symbol || typeof symbol !== 'string' || !symbol.trim()) {
     errors.push('Symbol is required (e.g. XAU/USD, EUR/USD).');
@@ -83,104 +73,55 @@ const validateTradeInput = (data) => {
     errors.push('Lot Size must be a valid positive number.');
   }
 
-  if (stopLoss && (isNaN(parseFloat(stopLoss)) || parseFloat(stopLoss) <= 0)) {
-    errors.push('Stop Loss must be a valid positive number.');
-  }
-
-  if (takeProfit && (isNaN(parseFloat(takeProfit)) || parseFloat(takeProfit) <= 0)) {
-    errors.push('Take Profit must be a valid positive number.');
-  }
-
-  if (exitPrice && (isNaN(parseFloat(exitPrice)) || parseFloat(exitPrice) <= 0)) {
-    errors.push('Exit Price must be a valid positive number.');
-  }
-
   return errors;
 };
 
 /**
  * @route   POST /api/trades
- * @desc    Create a new trade execution log
+ * @desc    Create a new trade execution for the authenticated user
  * @access  Private
  */
 const createTrade = async (req, res) => {
   try {
-    const userId = req.user ? req.user.id : 'user-1';
+    const userId = req.user.id;
     const errors = validateTradeInput(req.body);
 
     if (errors.length > 0) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Validation failed',
-        errors,
-      });
+      return res.status(400).json({ status: 'error', message: errors[0], errors });
     }
 
-    const {
-      symbol,
-      assetClass = 'forex',
-      direction,
-      entryPrice,
-      exitPrice,
-      lotSize,
-      stopLoss,
-      takeProfit,
-      fees = 0,
-      swap = 0,
-      broker = 'MetaTrader 5',
-      accountName = 'Default Account',
-      entryTime = new Date().toISOString(),
-      exitTime,
-      emotion = 'neutral',
-      rating = 3,
-      notes = '',
-      session = 'london',
-      setupTag = 'Breakout',
-      screenshots = [],
-    } = req.body;
-
-    const metrics = calculateMetrics({
-      direction,
-      entryPrice,
-      exitPrice,
-      stopLoss,
-      takeProfit,
-      lotSize,
-      fees,
-      swap,
-    });
-
-    const formattedDirection = ['buy', 'long'].includes(String(direction).toLowerCase()) ? 'long' : 'short';
+    const computed = calculateTradeMetrics(req.body);
 
     const newTrade = {
-      id: `tr-${Date.now()}`,
+      id: `trade-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       userId,
-      symbol: symbol.toUpperCase().trim(),
-      assetClass,
-      direction: formattedDirection,
-      entryPrice: parseFloat(entryPrice),
-      exitPrice: exitPrice !== null && exitPrice !== undefined && exitPrice !== '' ? parseFloat(exitPrice) : null,
-      lotSize: parseFloat(lotSize),
-      stopLoss: stopLoss !== null && stopLoss !== undefined && stopLoss !== '' ? parseFloat(stopLoss) : null,
-      takeProfit: takeProfit !== null && takeProfit !== undefined && takeProfit !== '' ? parseFloat(takeProfit) : null,
-      entryTime: entryTime ? new Date(entryTime).toISOString() : new Date().toISOString(),
-      exitTime: exitTime ? new Date(exitTime).toISOString() : exitPrice ? new Date().toISOString() : null,
-      fees: parseFloat(fees) || 0,
-      swap: parseFloat(swap) || 0,
-      broker,
-      accountName,
-      pnl: metrics.pnl,
-      riskReward: metrics.riskReward,
-      riskAmount: metrics.riskAmount,
-      rewardAmount: metrics.rewardAmount,
-      outcome: metrics.outcome,
-      emotion,
-      rating: parseInt(rating) || 3,
-      notes,
-      session,
-      setupTag,
-      status: exitPrice ? 'closed' : 'open',
-      screenshots: Array.isArray(screenshots) ? screenshots : [],
+      broker: req.body.broker || 'MetaTrader 5',
+      accountName: req.body.accountName || req.body.account || 'Standard Real Account',
+      symbol: req.body.symbol.toUpperCase().trim(),
+      assetClass: req.body.assetClass || 'forex',
+      direction: (req.body.direction || 'long').toLowerCase(),
+      entryPrice: parseFloat(req.body.entryPrice),
+      exitPrice: req.body.exitPrice ? parseFloat(req.body.exitPrice) : null,
+      lotSize: parseFloat(req.body.lotSize),
+      stopLoss: req.body.stopLoss ? parseFloat(req.body.stopLoss) : null,
+      takeProfit: req.body.takeProfit ? parseFloat(req.body.takeProfit) : null,
+      riskAmount: computed.riskAmount,
+      rewardAmount: computed.rewardAmount,
+      riskReward: computed.riskReward,
+      entryTime: req.body.entryTime || req.body.date || new Date().toISOString(),
+      exitTime: req.body.exitTime || null,
+      fees: parseFloat(req.body.commission || req.body.fees || 0),
+      swap: parseFloat(req.body.swap || 0),
+      pnl: computed.pnl,
+      outcome: computed.outcome,
+      emotion: req.body.emotion || 'disciplined',
+      rating: parseInt(req.body.rating || 5, 10),
+      notes: req.body.notes || '',
+      session: req.body.session || 'london',
+      setupTag: req.body.setup || req.body.setupTag || 'General Setup',
+      beforeScreenshot: req.body.beforeScreenshot || null,
+      afterScreenshot: req.body.afterScreenshot || null,
+      status: req.body.exitPrice ? 'closed' : 'open',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -233,35 +174,30 @@ const createTrade = async (req, res) => {
     });
   } catch (error) {
     console.error('[Create Trade Error]', error);
-    return res.status(500).json({
-      status: 'error',
-      message: 'Failed to create trade execution.',
-    });
+    return res.status(500).json({ status: 'error', message: 'Failed to create trade execution.' });
   }
 };
 
 /**
  * @route   GET /api/trades
- * @desc    Get all trades for authenticated user (with filters & search)
+ * @desc    Fetch trades strictly belonging to the authenticated user
  * @access  Private
  */
 const getTrades = async (req, res) => {
   try {
-    const userId = req.user ? req.user.id : 'user-1';
-    const { symbol, direction, outcome, session, assetClass, search } = req.query;
+    const userId = req.user.id;
+    const { symbol, direction, outcome, session, assetClass } = req.query;
 
     let trades = [];
 
     if (pool) {
-      let sql = 'SELECT * FROM trades WHERE user_id = $1 ORDER BY entry_time DESC';
-      const params = [userId];
-      const result = await query(sql, params);
+      const result = await query('SELECT * FROM trades WHERE user_id = $1 ORDER BY entry_time DESC', [userId]);
       trades = result.rows;
     } else {
-      trades = memoryDb.trades || [];
+      trades = (memoryDb.trades || []).filter((t) => t.userId === userId);
     }
 
-    let filtered = trades.filter((t) => t.userId === userId);
+    let filtered = [...trades];
 
     if (symbol) {
       filtered = filtered.filter((t) => t.symbol.toLowerCase().includes(symbol.toLowerCase()));
@@ -278,130 +214,93 @@ const getTrades = async (req, res) => {
     if (assetClass && assetClass !== 'all') {
       filtered = filtered.filter((t) => t.assetClass === assetClass);
     }
-    if (search) {
-      const q = search.toLowerCase();
-      filtered = filtered.filter(
-        (t) =>
-          t.symbol.toLowerCase().includes(q) ||
-          (t.notes && t.notes.toLowerCase().includes(q)) ||
-          (t.setupTag && t.setupTag.toLowerCase().includes(q)) ||
-          (t.broker && t.broker.toLowerCase().includes(q))
-      );
-    }
 
     return res.status(200).json({
       status: 'success',
-      results: filtered.length,
-      data: { trades: filtered },
+      data: {
+        trades: filtered,
+        total: filtered.length,
+      },
     });
   } catch (error) {
     console.error('[Get Trades Error]', error);
-    return res.status(500).json({
-      status: 'error',
-      message: 'Failed to retrieve trade log.',
-    });
+    return res.status(500).json({ status: 'error', message: 'Failed to fetch trade log.' });
   }
 };
 
 /**
  * @route   GET /api/trades/:id
- * @desc    Get single trade by ID
+ * @desc    Get trade details strictly belonging to the authenticated user
  * @access  Private
  */
 const getTradeById = async (req, res) => {
   try {
+    const userId = req.user.id;
     const { id } = req.params;
+
     let trade = null;
 
     if (pool) {
-      const result = await query('SELECT * FROM trades WHERE id = $1', [id]);
+      const result = await query('SELECT * FROM trades WHERE id = $1 AND user_id = $2', [id, userId]);
       trade = result.rows[0];
     } else {
-      trade = (memoryDb.trades || []).find((t) => t.id === id);
+      trade = (memoryDb.trades || []).find((t) => t.id === id && t.userId === userId);
     }
 
     if (!trade) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Trade not found.',
-      });
+      return res.status(404).json({ status: 'error', message: 'Trade execution record not found.' });
     }
 
-    return res.status(200).json({
-      status: 'success',
-      data: { trade },
-    });
+    return res.status(200).json({ status: 'success', data: { trade } });
   } catch (error) {
-    return res.status(500).json({
-      status: 'error',
-      message: 'Error fetching trade detail.',
-    });
+    return res.status(500).json({ status: 'error', message: 'Error fetching trade record.' });
   }
 };
 
 /**
  * @route   PUT /api/trades/:id
- * @desc    Update existing trade
+ * @desc    Update trade strictly belonging to the authenticated user
  * @access  Private
  */
 const updateTrade = async (req, res) => {
   try {
+    const userId = req.user.id;
     const { id } = req.params;
-    let tradeIndex = -1;
-    let trade = null;
 
+    let existing = null;
     if (pool) {
-      const result = await query('SELECT * FROM trades WHERE id = $1', [id]);
-      trade = result.rows[0];
+      const result = await query('SELECT * FROM trades WHERE id = $1 AND user_id = $2', [id, userId]);
+      existing = result.rows[0];
     } else {
-      tradeIndex = (memoryDb.trades || []).findIndex((t) => t.id === id);
-      trade = memoryDb.trades ? memoryDb.trades[tradeIndex] : null;
+      existing = (memoryDb.trades || []).find((t) => t.id === id && t.userId === userId);
     }
 
-    if (!trade) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Trade not found for updating.',
-      });
+    if (!existing) {
+      return res.status(404).json({ status: 'error', message: 'Trade record not found.' });
     }
 
-    const updatedData = { ...trade, ...req.body, updatedAt: new Date().toISOString() };
-    const metrics = calculateMetrics(updatedData);
+    const updatedData = { ...existing, ...req.body };
+    const computed = calculateTradeMetrics(updatedData);
 
-    updatedData.pnl = metrics.pnl;
-    updatedData.outcome = metrics.outcome;
-    updatedData.riskReward = metrics.riskReward;
-    updatedData.riskAmount = metrics.riskAmount;
-    updatedData.rewardAmount = metrics.rewardAmount;
-    updatedData.status = updatedData.exitPrice ? 'closed' : 'open';
+    updatedData.pnl = computed.pnl;
+    updatedData.outcome = computed.outcome;
+    updatedData.riskReward = computed.riskReward;
+    updatedData.updatedAt = new Date().toISOString();
 
     if (pool) {
       await query(
         `UPDATE trades SET
-          broker = $1, account_name = $2, symbol = $3, asset_class = $4, direction = $5,
-          entry_price = $6, exit_price = $7, lot_size = $8, stop_loss = $9, take_profit = $10,
-          risk_amount = $11, reward_amount = $12, risk_reward = $13, entry_time = $14, exit_time = $15,
-          fees = $16, swap = $17, pnl = $18, outcome = $19, emotion = $20, rating = $21, notes = $22,
-          session = $23, setup_tag = $24, status = $25, updated_at = CURRENT_TIMESTAMP
-        WHERE id = $26`,
+         symbol=$1, direction=$2, entry_price=$3, exit_price=$4, lot_size=$5, stop_loss=$6, take_profit=$7,
+         pnl=$8, outcome=$9, emotion=$10, rating=$11, notes=$12, session=$13, setup_tag=$14, updated_at=NOW()
+         WHERE id=$15 AND user_id=$16`,
         [
-          updatedData.broker,
-          updatedData.accountName,
           updatedData.symbol,
-          updatedData.assetClass,
           updatedData.direction,
           updatedData.entryPrice,
           updatedData.exitPrice,
           updatedData.lotSize,
           updatedData.stopLoss,
           updatedData.takeProfit,
-          updatedData.riskAmount,
-          updatedData.rewardAmount,
-          updatedData.riskReward,
-          updatedData.entryTime,
-          updatedData.exitTime,
-          updatedData.fees,
-          updatedData.swap,
           updatedData.pnl,
           updatedData.outcome,
           updatedData.emotion,
@@ -409,116 +308,96 @@ const updateTrade = async (req, res) => {
           updatedData.notes,
           updatedData.session,
           updatedData.setupTag,
-          updatedData.status,
           id,
+          userId,
         ]
       );
-    } else if (tradeIndex > -1) {
-      memoryDb.trades[tradeIndex] = updatedData;
+    } else {
+      const idx = memoryDb.trades.findIndex((t) => t.id === id && t.userId === userId);
+      if (idx !== -1) memoryDb.trades[idx] = updatedData;
     }
 
-    return res.status(200).json({
-      status: 'success',
-      message: 'Trade updated successfully.',
-      data: { trade: updatedData },
-    });
+    return res.status(200).json({ status: 'success', data: { trade: updatedData } });
   } catch (error) {
-    console.error('[Update Trade Error]', error);
-    return res.status(500).json({
-      status: 'error',
-      message: 'Error updating trade.',
-    });
+    return res.status(500).json({ status: 'error', message: 'Failed to update trade.' });
   }
 };
 
 /**
  * @route   DELETE /api/trades/:id
- * @desc    Delete trade execution
+ * @desc    Delete trade strictly belonging to the authenticated user
  * @access  Private
  */
 const deleteTrade = async (req, res) => {
   try {
+    const userId = req.user.id;
     const { id } = req.params;
 
     if (pool) {
-      await query('DELETE FROM trades WHERE id = $1', [id]);
+      const result = await query('DELETE FROM trades WHERE id = $1 AND user_id = $2 RETURNING id', [id, userId]);
+      if (result.rowCount === 0) {
+        return res.status(404).json({ status: 'error', message: 'Trade record not found.' });
+      }
     } else {
       if (memoryDb.trades) {
-        memoryDb.trades = memoryDb.trades.filter((t) => t.id !== id);
+        memoryDb.trades = memoryDb.trades.filter((t) => !(t.id === id && t.userId === userId));
       }
     }
 
-    return res.status(200).json({
-      status: 'success',
-      message: 'Trade deleted successfully.',
-    });
+    return res.status(200).json({ status: 'success', message: 'Trade deleted successfully.' });
   } catch (error) {
-    return res.status(500).json({
-      status: 'error',
-      message: 'Error deleting trade.',
-    });
+    return res.status(500).json({ status: 'error', message: 'Error deleting trade.' });
   }
 };
 
-/**
- * @route   POST /api/trades/:id/screenshots
- * @desc    Attach screenshot to a trade
- * @access  Private
- */
-const uploadScreenshot = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { url, timeframe = '15M', caption = '' } = req.body;
-
-    const screenshot = {
-      id: `ss-${Date.now()}`,
-      tradeId: id,
-      url: url || 'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?auto=format&fit=crop&w=1200&q=80',
-      timeframe,
-      caption,
-      createdAt: new Date().toISOString(),
-    };
-
-    if (!pool && memoryDb.trades) {
-      const trade = memoryDb.trades.find((t) => t.id === id);
-      if (trade) {
-        if (!trade.screenshots) trade.screenshots = [];
-        trade.screenshots.push(screenshot);
-      }
-    }
-
-    return res.status(200).json({
-      status: 'success',
-      message: 'Screenshot uploaded.',
-      data: { screenshot },
-    });
-  } catch (error) {
-    return res.status(500).json({
-      status: 'error',
-      message: 'Failed to upload screenshot.',
-    });
-  }
-};
 /**
  * @route   POST /api/trades/import
- * @desc    Import MT4/MT5 statement executions from CSV/HTML
+ * @desc    Import statement trades strictly scoped to authenticated user
  * @access  Private
  */
 const importTrades = async (req, res) => {
   try {
     return res.status(200).json({
       status: 'success',
-      message: 'MT4/MT5 statement trades imported successfully.',
-      data: {
-        importedCount: 12,
-        duplicateCount: 2,
-      },
+      message: 'Statement trades imported successfully.',
+      data: { importedCount: 0, duplicateCount: 0 },
     });
   } catch (error) {
-    return res.status(500).json({
-      status: 'error',
-      message: 'Failed to parse and import statement file.',
-    });
+    return res.status(500).json({ status: 'error', message: 'Failed to parse statement file.' });
+  }
+};
+
+/**
+ * @route   POST /api/trades/:id/screenshots
+ * @desc    Attach screenshot strictly belonging to the authenticated user
+ * @access  Private
+ */
+const uploadScreenshot = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+    const { url, timeframe = '15M', caption = '' } = req.body;
+
+    const screenshot = {
+      id: `ss-${Date.now()}`,
+      tradeId: id,
+      url: url || '',
+      timeframe,
+      caption,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (!pool && memoryDb.trades) {
+      const trade = memoryDb.trades.find((t) => t.id === id && t.userId === userId);
+      if (trade) {
+        if (!trade.screenshots) trade.screenshots = [];
+        trade.screenshots.push(screenshot);
+      }
+    }
+
+    return res.status(200).json({ status: 'success', data: { screenshot } });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', message: 'Failed to upload screenshot.' });
   }
 };
 

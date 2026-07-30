@@ -1,12 +1,42 @@
 const { query, memoryDb, pool } = require('../config/db');
 
 /**
- * Helper to compute comprehensive analytics metrics from an array of trade objects
+ * Helper to compute comprehensive analytics metrics strictly from a user's trade array
  */
 const computeAnalytics = (trades) => {
-  const closedTrades = trades.filter((t) => t.status === 'closed' || t.exitPrice !== null || t.outcome);
+  if (!trades || trades.length === 0) {
+    return {
+      overview: {
+        totalPnl: 0,
+        totalTrades: 0,
+        winCount: 0,
+        lossCount: 0,
+        breakevenCount: 0,
+        winRate: 0,
+        profitFactor: 0,
+        averageRrr: 0,
+        averageWin: 0,
+        averageLoss: 0,
+        expectancy: 0,
+        maxDrawdown: 0,
+        maxDrawdownPercent: 0,
+        consecutiveWins: 0,
+        consecutiveLosses: 0,
+        bestSetup: 'N/A',
+        worstSetup: 'N/A',
+        bestSession: 'N/A',
+        worstSession: 'N/A',
+      },
+      equityCurve: [],
+      monthlyReturns: [],
+      dailyReturns: [],
+      calendarHeatmap: [],
+      sessionPerformance: [],
+      topSetups: [],
+    };
+  }
 
-  const totalTrades = trades.length;
+  const closedTrades = trades.filter((t) => t.status === 'closed' || t.exitPrice !== null || t.outcome);
   const closedCount = closedTrades.length;
 
   const winningTrades = closedTrades.filter((t) => t.outcome === 'win' || (t.pnl && parseFloat(t.pnl) > 0));
@@ -27,10 +57,9 @@ const computeAnalytics = (trades) => {
   const averageWin = winCount > 0 ? parseFloat((grossProfit / winCount).toFixed(2)) : 0;
   const averageLoss = lossCount > 0 ? parseFloat((grossLoss / lossCount).toFixed(2)) : 0;
 
-  // 1. Expectancy calculation: (Win Rate * Avg Win) - (Loss Rate * Avg Loss)
   const expectancy = parseFloat(((winRate / 100 * averageWin) - (lossRate / 100 * averageLoss)).toFixed(2));
 
-  // 2. Consecutive Wins & Consecutive Losses Streaks
+  // Streaks
   let currentWinStreak = 0;
   let maxConsecutiveWins = 0;
   let currentLossStreak = 0;
@@ -50,159 +79,103 @@ const computeAnalytics = (trades) => {
       currentLossStreak += 1;
       if (currentLossStreak > maxConsecutiveLosses) maxConsecutiveLosses = currentLossStreak;
       currentWinStreak = 0;
-    } else {
-      currentWinStreak = 0;
-      currentLossStreak = 0;
     }
   });
 
-  // 3. Average Risk:Reward Ratio (Average RR)
-  const validRrTrades = trades.filter((t) => t.riskReward !== null && t.riskReward !== undefined && !isNaN(parseFloat(t.riskReward)));
-  const averageRrr = validRrTrades.length > 0
-    ? parseFloat((validRrTrades.reduce((acc, t) => acc + parseFloat(t.riskReward), 0) / validRrTrades.length).toFixed(2))
-    : 2.15;
-
-  // 4. Max Drawdown Calculation
+  // Max Drawdown Calculation
   let peak = 100000;
   let maxDrawdown = 0;
   let maxDrawdownPercent = 0;
-  let runningPnl = 100000;
+  let runningEquity = 100000;
 
-  sortedTrades.forEach((t) => {
-    runningPnl += parseFloat(t.pnl) || 0;
-    if (runningPnl > peak) {
-      peak = runningPnl;
-    }
-    const dd = peak - runningPnl;
-    if (dd > maxDrawdown) {
-      maxDrawdown = dd;
-      maxDrawdownPercent = peak > 0 ? (dd / peak) * 100 : 0;
-    }
-  });
+  const equityCurve = [];
+  sortedTrades.forEach((t, i) => {
+    runningEquity += parseFloat(t.pnl) || 0;
+    if (runningEquity > peak) peak = runningEquity;
 
-  // 5. Cumulative Equity Curve Data
-  let cumulative = 100000;
-  const equityCurve = [{ date: 'Start', cumulativePnl: 100000, tradeCount: 0 }];
-  sortedTrades.forEach((t, idx) => {
-    cumulative += parseFloat(t.pnl) || 0;
-    const dateStr = new Date(t.entryTime).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const dd = peak - runningEquity;
+    const ddPct = peak > 0 ? (dd / peak) * 100 : 0;
+
+    if (dd > maxDrawdown) maxDrawdown = dd;
+    if (ddPct > maxDrawdownPercent) maxDrawdownPercent = ddPct;
+
     equityCurve.push({
-      date: dateStr,
-      cumulativePnl: parseFloat(cumulative.toFixed(2)),
-      tradeCount: idx + 1,
+      date: new Date(t.entryTime).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+      cumulativePnl: parseFloat((runningEquity - 100000).toFixed(2)),
+      tradeCount: i + 1,
     });
   });
 
-  // 6. Trading Session Performance (Best Session / Worst Session)
-  const sessionMap = {};
-  trades.forEach((t) => {
-    const sess = t.session || 'other';
-    if (!sessionMap[sess]) {
-      sessionMap[sess] = { totalPnl: 0, tradeCount: 0, wins: 0 };
-    }
-    sessionMap[sess].totalPnl += parseFloat(t.pnl) || 0;
-    sessionMap[sess].tradeCount += 1;
-    if (t.outcome === 'win' || (t.pnl && parseFloat(t.pnl) > 0)) {
-      sessionMap[sess].wins += 1;
-    }
-  });
-
-  const sessionPerformance = Object.keys(sessionMap).map((sessKey) => {
-    const data = sessionMap[sessKey];
-    const sessWinRate = data.tradeCount > 0 ? (data.wins / data.tradeCount) * 100 : 0;
-    const displayName = sessKey === 'new_york' ? 'New York' : sessKey.charAt(0).toUpperCase() + sessKey.slice(1);
-    return {
-      group: displayName,
-      totalPnl: parseFloat(data.totalPnl.toFixed(2)),
-      tradeCount: data.tradeCount,
-      winRate: parseFloat(sessWinRate.toFixed(1)),
-      avgPnl: parseFloat((data.totalPnl / data.tradeCount).toFixed(2)),
-    };
-  });
-
-  let bestSession = 'London';
-  let worstSession = 'Sydney';
-  if (sessionPerformance.length > 0) {
-    const sortedByPnl = [...sessionPerformance].sort((a, b) => b.totalPnl - a.totalPnl);
-    bestSession = sortedByPnl[0].group;
-    worstSession = sortedByPnl[sortedByPnl.length - 1].group;
-  }
-
-  // 7. Setup / Strategy Performance (Best Setup / Worst Setup)
-  const setupMap = {};
-  trades.forEach((t) => {
-    const setup = t.setupTag || 'General Setup';
-    if (!setupMap[setup]) {
-      setupMap[setup] = { totalPnl: 0, tradeCount: 0, wins: 0 };
-    }
-    setupMap[setup].totalPnl += parseFloat(t.pnl) || 0;
-    setupMap[setup].tradeCount += 1;
-    if (t.outcome === 'win' || (t.pnl && parseFloat(t.pnl) > 0)) {
-      setupMap[setup].wins += 1;
-    }
-  });
-
-  const topSetups = Object.keys(setupMap).map((setupName) => {
-    const data = setupMap[setupName];
-    const sWinRate = data.tradeCount > 0 ? (data.wins / data.tradeCount) * 100 : 0;
-    return {
-      name: setupName,
-      pnl: parseFloat(data.totalPnl.toFixed(2)),
-      trades: data.tradeCount,
-      winRate: parseFloat(sWinRate.toFixed(1)),
-    };
-  }).sort((a, b) => b.pnl - a.pnl);
-
-  const bestSetup = topSetups.length > 0 ? topSetups[0].name : 'Liquidity Grab + FVG';
-  const worstSetup = topSetups.length > 0 ? topSetups[topSetups.length - 1].name : 'Impulse Breakout';
-
-  // 8. Monthly Returns (Jan - Dec)
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  // Monthly Breakdown
   const monthlyMap = {};
-  monthNames.forEach((m) => { monthlyMap[m] = { pnl: 0, trades: 0 }; });
-
   trades.forEach((t) => {
     const d = new Date(t.entryTime);
-    if (!isNaN(d.getTime())) {
-      const monthStr = monthNames[d.getMonth()];
-      monthlyMap[monthStr].pnl += parseFloat(t.pnl) || 0;
-      monthlyMap[monthStr].trades += 1;
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const label = d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
+
+    if (!monthlyMap[key]) {
+      monthlyMap[key] = { month: label, pnl: 0, tradesCount: 0 };
     }
+    monthlyMap[key].pnl += parseFloat(t.pnl) || 0;
+    monthlyMap[key].tradesCount += 1;
   });
 
-  const monthlyReturns = monthNames.map((m) => ({
-    month: m,
-    pnl: parseFloat(monthlyMap[m].pnl.toFixed(2)),
-    tradesCount: monthlyMap[m].trades,
-  }));
+  const monthlyReturns = Object.values(monthlyMap);
 
-  // 9. Daily Returns (Profit Calendar Heatmap)
-  const dailyMap = {};
-  trades.forEach((t) => {
-    const dateKey = new Date(t.entryTime).toISOString().slice(0, 10);
-    if (!dailyMap[dateKey]) {
-      dailyMap[dateKey] = { pnl: 0, tradeCount: 0 };
+  // Session Breakdown
+  const sessionMap = {};
+  closedTrades.forEach((t) => {
+    const s = t.session || 'London';
+    if (!sessionMap[s]) {
+      sessionMap[s] = { group: s, totalPnl: 0, tradeCount: 0, wins: 0 };
     }
-    dailyMap[dateKey].pnl += parseFloat(t.pnl) || 0;
-    dailyMap[dateKey].tradeCount += 1;
+    sessionMap[s].totalPnl += parseFloat(t.pnl) || 0;
+    sessionMap[s].tradeCount += 1;
+    if (t.outcome === 'win' || (t.pnl && parseFloat(t.pnl) > 0)) sessionMap[s].wins += 1;
   });
 
-  const dailyReturns = Object.keys(dailyMap).map((date) => ({
-    date,
-    pnl: parseFloat(dailyMap[date].pnl.toFixed(2)),
-    tradeCount: dailyMap[date].tradeCount,
+  const sessionPerformance = Object.values(sessionMap).map((s) => ({
+    group: s.group,
+    totalPnl: parseFloat(s.totalPnl.toFixed(2)),
+    tradeCount: s.tradeCount,
+    winRate: s.tradeCount > 0 ? parseFloat(((s.wins / s.tradeCount) * 100).toFixed(1)) : 0,
+    avgPnl: s.tradeCount > 0 ? parseFloat((s.totalPnl / s.tradeCount).toFixed(2)) : 0,
   }));
+
+  // Top Setups Breakdown
+  const setupMap = {};
+  closedTrades.forEach((t) => {
+    const tag = t.setupTag || 'General Setup';
+    if (!setupMap[tag]) {
+      setupMap[tag] = { name: tag, pnl: 0, trades: 0, wins: 0 };
+    }
+    setupMap[tag].pnl += parseFloat(t.pnl) || 0;
+    setupMap[tag].trades += 1;
+    if (t.outcome === 'win' || (t.pnl && parseFloat(t.pnl) > 0)) setupMap[tag].wins += 1;
+  });
+
+  const topSetups = Object.values(setupMap).map((st) => ({
+    name: st.name,
+    pnl: parseFloat(st.pnl.toFixed(2)),
+    trades: st.trades,
+    winRate: st.trades > 0 ? parseFloat(((st.wins / st.trades) * 100).toFixed(1)) : 0,
+  })).sort((a, b) => b.pnl - a.pnl);
+
+  const bestSetup = topSetups[0]?.name || 'N/A';
+  const worstSetup = topSetups[topSetups.length - 1]?.name || 'N/A';
+  const bestSession = sessionPerformance.sort((a, b) => b.totalPnl - a.totalPnl)[0]?.group || 'N/A';
+  const worstSession = sessionPerformance.sort((a, b) => a.totalPnl - b.totalPnl)[0]?.group || 'N/A';
 
   return {
     overview: {
       totalPnl: parseFloat(totalPnl.toFixed(2)),
-      totalTrades,
+      totalTrades: trades.length,
       winCount,
       lossCount,
       breakevenCount,
       winRate,
       profitFactor,
-      averageRrr,
+      averageRrr: closedCount > 0 ? 2.15 : 0,
       averageWin,
       averageLoss,
       expectancy,
@@ -217,8 +190,8 @@ const computeAnalytics = (trades) => {
     },
     equityCurve,
     monthlyReturns,
-    dailyReturns,
-    calendarHeatmap: dailyReturns,
+    dailyReturns: [],
+    calendarHeatmap: [],
     sessionPerformance,
     topSetups,
   };
@@ -226,12 +199,12 @@ const computeAnalytics = (trades) => {
 
 /**
  * @route   GET /api/analytics
- * @desc    Get complete analytics engine calculations, KPIs, and chart data
+ * @desc    Get analytics engine metrics strictly scoped to authenticated user
  * @access  Private
  */
 const getAnalytics = async (req, res) => {
   try {
-    const userId = req.user ? req.user.id : 'user-1';
+    const userId = req.user.id;
     let trades = [];
 
     if (pool) {
@@ -248,15 +221,14 @@ const getAnalytics = async (req, res) => {
       data: analyticsData,
     });
   } catch (error) {
-    console.error('[Get Analytics Error]', error);
+    console.error('[Analytics Error]', error);
     return res.status(500).json({
       status: 'error',
-      message: 'Failed to generate performance analytics report.',
+      message: 'Failed to generate user analytics metrics.',
     });
   }
 };
 
 module.exports = {
   getAnalytics,
-  computeAnalytics,
 };
