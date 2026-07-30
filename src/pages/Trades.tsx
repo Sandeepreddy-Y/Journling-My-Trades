@@ -20,14 +20,13 @@ import {
 import toast from 'react-hot-toast';
 
 import api from '@/lib/axios';
-import { MOCK_RECENT_TRADES } from '@/lib/dummyData';
 import { formatPnl, getPnlColorClass, cn } from '@/lib/helpers';
 import { ImportTradesModal } from '@/components/trades/ImportTradesModal';
 import type { Trade } from '@/types';
 
 export default function Trades() {
   const navigate = useNavigate();
-  const [trades, setTrades] = useState<Trade[]>(MOCK_RECENT_TRADES);
+  const [trades, setTrades] = useState<Trade[]>([]);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedAsset, setSelectedAsset] = useState<string>('all');
@@ -43,15 +42,14 @@ export default function Trades() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 8;
 
-  // Fetch Trades from Backend API
   const fetchTrades = async () => {
     try {
       const res = await api.get<{ status: string; data: { trades: Trade[] } }>('/trades');
-      if (res.data.data.trades && res.data.data.trades.length > 0) {
+      if (Array.isArray(res.data?.data?.trades)) {
         setTrades(res.data.data.trades);
       }
     } catch {
-      // Fallback local state if offline or mock
+      setTrades([]);
     }
   };
 

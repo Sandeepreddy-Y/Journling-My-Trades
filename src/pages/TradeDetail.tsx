@@ -19,7 +19,6 @@ import {
 import toast from 'react-hot-toast';
 
 import api from '@/lib/axios';
-import { MOCK_RECENT_TRADES } from '@/lib/dummyData';
 import { formatPnl, getPnlColorClass, cn } from '@/lib/helpers';
 import { TradeReplayModal } from '@/components/trades/TradeReplayModal';
 import type { Trade } from '@/types';
@@ -37,50 +36,62 @@ export default function TradeDetail() {
       setLoading(true);
       try {
         const res = await api.get<{ status: string; data: { trade: Trade } }>(`/trades/${id}`);
-        if (res.data.data.trade) {
+        if (res.data && res.data.data && res.data.data.trade) {
           setTrade(res.data.data.trade);
           setLoading(false);
           return;
         }
       } catch {
-        // Fallback to mock data
+        setTrade(null);
       }
-
-      const mock = MOCK_RECENT_TRADES.find((t) => t.id === id) || MOCK_RECENT_TRADES[0];
-      setTrade(mock);
       setLoading(false);
     };
 
     fetchDetail();
   }, [id]);
 
-  if (loading || !trade) {
+  const handleDelete = async () => {
+    if (!trade) return;
+    try {
+      await api.delete(`/trades/${trade.id}`);
+      toast.success('Trade execution deleted successfully');
+      navigate('/trades');
+    } catch {
+      toast.error('Failed to delete trade');
+    }
+  };
+
+  if (loading) {
     return (
-      <div className="py-20 text-center text-text-muted">
-        Loading trade execution details...
+      <div className="min-h-[60vh] flex flex-col items-center justify-center space-y-3">
+        <div className="w-10 h-10 border-3 border-primary/30 border-t-primary rounded-full animate-spin" />
+        <span className="text-xs text-text-muted font-medium tracking-wide">Loading trade execution details...</span>
       </div>
     );
   }
 
-  const handleDelete = async () => {
-    if (!window.confirm('Are you sure you want to delete this trade execution log?')) return;
-    try {
-      await api.delete(`/trades/${trade.id}`);
-      toast.success('Trade deleted successfully');
-      navigate('/trades');
-    } catch {
-      toast.success('Trade deleted successfully');
-      navigate('/trades');
-    }
-  };
+  if (!trade) {
+    return (
+      <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-12 text-center space-y-4 max-w-lg mx-auto shadow-xl my-12">
+        <h2 className="text-lg font-bold text-text-bright">Trade Record Not Found</h2>
+        <p className="text-xs text-text-muted">This trade record does not exist or does not belong to your account.</p>
+        <button
+          onClick={() => navigate('/trades')}
+          className="px-5 py-2.5 bg-primary text-white font-bold text-xs rounded-xl shadow-lg hover:bg-primary/90 transition-all"
+        >
+          Back to Trades Log
+        </button>
+      </div>
+    );
+  }
 
   const entry = trade.entryPrice || 0;
+  const exit = trade.exitPrice || 0;
   const sl = trade.stopLoss || 0;
   const tp = trade.takeProfit || 0;
-  const lots = trade.lotSize || 1;
-  const comm = (trade.fees || 0) + (trade.swap || 0);
+  const lots = trade.lotSize || 0;
 
-  const calcRisk = trade.riskAmount ?? (sl && entry ? Math.abs(entry - sl) * lots * 100 : 0);
+  const calcRisk = trade.riskAmount ?? (entry && sl ? Math.abs(entry - sl) * lots * 100 : 0);
   const calcReward = trade.rewardAmount ?? (tp && entry ? Math.abs(tp - entry) * lots * 100 : 0);
 
   const riskPercent = trade.riskPercent ?? (entry > 0 && sl > 0 ? ((Math.abs(entry - sl) / entry) * 100).toFixed(2) : '0.00');
@@ -113,22 +124,37 @@ export default function TradeDetail() {
           </div>
 
           <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-extrabold text-text-bright tracking-tight">{trade.symbol}</h1>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-extrabold uppercase px-2.5 py-0.5 rounded-full bg-white/[0.06] text-text-bright border border-white/[0.08]">
+                {trade.symbol}
+              </span>
               <span
                 className={cn(
-                  'px-2.5 py-0.5 rounded-full text-xs font-bold uppercase',
-                  trade.direction === 'long' ? 'bg-profit/20 text-profit' : 'bg-loss/20 text-loss',
+                  'text-xs font-extrabold uppercase px-2.5 py-0.5 rounded-full',
+                  trade.direction === 'long' ? 'bg-profit/10 text-profit' : 'bg-loss/10 text-loss',
                 )}
               >
-                {trade.direction === 'long' ? 'BUY (LONG)' : 'SELL (SHORT)'}
+                {trade.direction}
               </span>
-              <span className="px-2 py-0.5 rounded text-xs uppercase font-semibold bg-white/[0.06] text-text-muted">
-                {trade.assetClass}
-              </span>
+              {trade.outcome && (
+                <span
+                  className={cn(
+                    'text-xs font-extrabold uppercase px-2.5 py-0.5 rounded-full',
+                    trade.outcome === 'win' && 'bg-profit/20 text-profit',
+                    trade.outcome === 'loss' && 'bg-loss/20 text-loss',
+                    trade.outcome === 'breakeven' && 'bg-white/[0.08] text-text-muted',
+                  )}
+                >
+                  {trade.outcome}
+                </span>
+              )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 text-xs text-text-secondary mt-1">
+            <h1 className="text-2xl font-black text-text-bright tracking-tight mt-1">
+              Position Details: {trade.symbol} ({trade.direction.toUpperCase()})
+            </h1>
+
+            <div className="flex items-center gap-4 text-xs text-text-secondary mt-1">
               <span className="flex items-center gap-1">
                 <Calendar className="w-3.5 h-3.5 text-primary" />
                 Date & Time:{' '}
@@ -185,197 +211,121 @@ export default function TradeDetail() {
         </div>
       </div>
 
-      {/* Grid Layout: Execution Stats + Psychology & Notes */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Execution Metrics (2 cols) */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Price & Level Metrics */}
-          <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-6 space-y-4 shadow-lg">
-            <h2 className="text-sm font-bold text-text-bright flex items-center gap-2 border-b border-white/[0.06] pb-3">
-              <Target className="w-4 h-4 text-primary" />
-              Execution Levels & Lot Size
-            </h2>
+      {/* Grid Details (2 cols) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Left Card: Price & Position Levels */}
+        <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-6 space-y-4 shadow-xl">
+          <h2 className="text-sm font-bold text-text-bright flex items-center gap-2 border-b border-white/[0.06] pb-3">
+            <Target className="w-4 h-4 text-primary" /> Execution Price Levels
+          </h2>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-              <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
-                <span className="text-[10px] text-text-muted uppercase font-semibold">Entry Price</span>
-                <p className="text-sm font-bold text-text-bright font-mono mt-0.5">{trade.entryPrice}</p>
-              </div>
-
-              <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
-                <span className="text-[10px] text-text-muted uppercase font-semibold">Exit Price</span>
-                <p className="text-sm font-bold text-text-bright font-mono mt-0.5">{trade.exitPrice || 'Open'}</p>
-              </div>
-
-              <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
-                <span className="text-[10px] text-text-muted uppercase font-semibold">Stop Loss</span>
-                <p className="text-sm font-bold text-loss font-mono mt-0.5">{trade.stopLoss || '—'}</p>
-              </div>
-
-              <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
-                <span className="text-[10px] text-text-muted uppercase font-semibold">Take Profit</span>
-                <p className="text-sm font-bold text-profit font-mono mt-0.5">{trade.takeProfit || '—'}</p>
-              </div>
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
+              <span className="text-text-muted text-[11px] block">Entry Price</span>
+              <span className="font-bold text-text-bright font-mono text-sm">{entry}</span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center pt-2">
-              <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
-                <span className="text-[10px] text-text-muted uppercase font-semibold">Lot Size</span>
-                <p className="text-sm font-bold text-text-primary mt-0.5 font-mono">{trade.lotSize} Lots</p>
-              </div>
-
-              <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
-                <span className="text-[10px] text-text-muted uppercase font-semibold">Risk : Reward (RR)</span>
-                <p className="text-sm font-bold text-text-bright mt-0.5 font-mono">{trade.riskReward ? `1:${trade.riskReward}` : '—'}</p>
-              </div>
-
-              <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
-                <span className="text-[10px] text-text-muted uppercase font-semibold">Commission</span>
-                <p className="text-sm font-bold text-text-secondary mt-0.5 font-mono">${trade.fees || '0.00'}</p>
-              </div>
-
-              <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
-                <span className="text-[10px] text-text-muted uppercase font-semibold">Swap</span>
-                <p className="text-sm font-bold text-text-secondary mt-0.5 font-mono">${trade.swap || '0.00'}</p>
-              </div>
+            <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
+              <span className="text-text-muted text-[11px] block">Exit Price</span>
+              <span className="font-bold text-text-bright font-mono text-sm">{exit || 'N/A'}</span>
             </div>
-          </div>
 
-          {/* Risk & Reward Analytics */}
-          <div className="bg-bg-card border border-primary/20 bg-primary/[0.02] rounded-2xl p-6 space-y-4">
-            <h2 className="text-sm font-bold text-primary flex items-center gap-2 border-b border-primary/20 pb-3">
-              <TrendingUp className="w-4 h-4" />
-              Risk % & Reward % Metrics
-            </h2>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-center">
-              <div className="p-3.5 bg-white/[0.03] rounded-xl border border-white/[0.06]">
-                <span className="text-[10px] text-text-muted uppercase font-semibold">Max Risk ($ & %)</span>
-                <p className="text-base font-bold text-loss mt-0.5">-${calcRisk.toFixed(2)}</p>
-                <span className="text-[10px] text-text-muted flex items-center justify-center gap-0.5 mt-0.5">
-                  <Percent className="w-2.5 h-2.5 text-loss" /> {riskPercent}% Stop Distance
-                </span>
-              </div>
-
-              <div className="p-3.5 bg-white/[0.03] rounded-xl border border-white/[0.06]">
-                <span className="text-[10px] text-text-muted uppercase font-semibold">Target Reward ($ & %)</span>
-                <p className="text-base font-bold text-profit mt-0.5">+${calcReward.toFixed(2)}</p>
-                <span className="text-[10px] text-text-muted flex items-center justify-center gap-0.5 mt-0.5">
-                  <Percent className="w-2.5 h-2.5 text-profit" /> {rewardPercent}% TP Target
-                </span>
-              </div>
-
-              <div className="p-3.5 bg-white/[0.03] rounded-xl border border-white/[0.06] col-span-2 sm:col-span-1">
-                <span className="text-[10px] text-text-muted uppercase font-semibold">Total Deductions</span>
-                <p className="text-base font-bold text-text-secondary mt-0.5">${comm.toFixed(2)}</p>
-                <span className="text-[10px] text-text-muted block mt-0.5">Fees + Swap</span>
-              </div>
+            <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
+              <span className="text-text-muted text-[11px] block">Stop Loss</span>
+              <span className="font-bold text-loss font-mono text-sm">{sl || 'N/A'}</span>
             </div>
-          </div>
 
-          {/* Before & After Chart Screenshots Gallery */}
-          <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-6 space-y-4 shadow-lg">
-            <h2 className="text-sm font-bold text-text-bright border-b border-white/[0.06] pb-3 flex items-center gap-2">
-              <ImageIcon className="w-4 h-4 text-primary" /> Before Entry & After Exit Chart Screenshots
-            </h2>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {/* Before Chart */}
-              <div>
-                <span className="text-xs font-semibold text-text-secondary block mb-2">Before Entry Chart</span>
-                {beforeImg ? (
-                  <div
-                    onClick={() => setSelectedImage(beforeImg)}
-                    className="relative group rounded-xl overflow-hidden border border-white/[0.08] cursor-pointer"
-                  >
-                    <img src={beforeImg} alt="Before Entry Chart" className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-300" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                      <Maximize2 className="w-6 h-6 text-white" />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-6 text-center text-text-muted border border-dashed border-white/[0.08] rounded-xl text-xs">
-                    No Before Entry chart uploaded.
-                  </div>
-                )}
-              </div>
-
-              {/* After Chart */}
-              <div>
-                <span className="text-xs font-semibold text-text-secondary block mb-2">After Exit Chart</span>
-                {afterImg ? (
-                  <div
-                    onClick={() => setSelectedImage(afterImg)}
-                    className="relative group rounded-xl overflow-hidden border border-white/[0.08] cursor-pointer"
-                  >
-                    <img src={afterImg} alt="After Exit Chart" className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-300" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                      <Maximize2 className="w-6 h-6 text-white" />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-6 text-center text-text-muted border border-dashed border-white/[0.08] rounded-xl text-xs">
-                    No After Exit chart uploaded.
-                  </div>
-                )}
-              </div>
+            <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
+              <span className="text-text-muted text-[11px] block">Take Profit</span>
+              <span className="font-bold text-profit font-mono text-sm">{tp || 'N/A'}</span>
             </div>
           </div>
         </div>
 
-        {/* Sidebar Context & Psychology (1 col) */}
-        <div className="space-y-6">
-          <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-6 space-y-4 shadow-lg">
-            <h2 className="text-sm font-bold text-text-bright flex items-center gap-2 border-b border-white/[0.06] pb-3">
-              <Building className="w-4 h-4 text-primary" />
-              Account & Context
-            </h2>
+        {/* Right Card: Risk & Reward Parameters */}
+        <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-6 space-y-4 shadow-xl">
+          <h2 className="text-sm font-bold text-text-bright flex items-center gap-2 border-b border-white/[0.06] pb-3">
+            <TrendingUp className="w-4 h-4 text-profit" /> Risk & Reward Metrics
+          </h2>
 
-            <div className="space-y-3 text-xs">
-              <div className="flex justify-between p-2.5 bg-white/[0.02] rounded-xl border border-white/[0.04]">
-                <span className="text-text-muted">Broker:</span>
-                <span className="font-bold text-text-bright">{trade.broker || 'MetaTrader 5'}</span>
-              </div>
-
-              <div className="flex justify-between p-2.5 bg-white/[0.02] rounded-xl border border-white/[0.04]">
-                <span className="text-text-muted">Account:</span>
-                <span className="font-bold text-text-bright">{trade.accountName || 'Default Account'}</span>
-              </div>
-
-              <div className="flex justify-between p-2.5 bg-white/[0.02] rounded-xl border border-white/[0.04]">
-                <span className="text-text-muted">Strategy Setup:</span>
-                <span className="font-bold text-text-bright">{trade.setupTag || 'General'}</span>
-              </div>
-
-              <div className="flex justify-between p-2.5 bg-white/[0.02] rounded-xl border border-white/[0.04]">
-                <span className="text-text-muted">Trading Session:</span>
-                <span className="font-semibold text-text-primary capitalize">{trade.session || '—'}</span>
-              </div>
-
-              <div className="flex justify-between p-2.5 bg-white/[0.02] rounded-xl border border-white/[0.04]">
-                <span className="text-text-muted font-semibold">Emotional State:</span>
-                <span className="font-semibold text-primary capitalize">{trade.emotion || 'Neutral'}</span>
-              </div>
-
-              <div className="flex justify-between p-2.5 bg-white/[0.02] rounded-xl border border-white/[0.04]">
-                <span className="text-text-muted">Execution Rating:</span>
-                <span className="font-bold text-warning">{'⭐'.repeat(trade.rating || 5)}</span>
-              </div>
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
+              <span className="text-text-muted text-[11px] block">Lot Size</span>
+              <span className="font-bold text-text-bright font-mono text-sm">{lots} Lots</span>
             </div>
-          </div>
 
-          {/* Journal Notes */}
-          <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-6 space-y-3 shadow-lg">
-            <h2 className="text-sm font-bold text-text-bright flex items-center gap-2 border-b border-white/[0.06] pb-3">
-              <FileText className="w-4 h-4 text-primary" />
-              Journal Notes
-            </h2>
-            <p className="text-xs text-text-secondary leading-relaxed bg-white/[0.02] border border-white/[0.04] p-4 rounded-xl italic">
-              &ldquo;{trade.notes || 'No journal notes provided for this execution.'}&rdquo;
-            </p>
+            <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
+              <span className="text-text-muted text-[11px] block">R:R Ratio</span>
+              <span className="font-bold text-primary font-mono text-sm">1:{trade.riskReward || '0.00'}</span>
+            </div>
+
+            <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
+              <span className="text-text-muted text-[11px] block flex items-center gap-1">
+                <Percent className="w-3 h-3 text-loss" /> Risk %
+              </span>
+              <span className="font-bold text-loss font-mono text-sm">{riskPercent}% (${calcRisk.toFixed(2)})</span>
+            </div>
+
+            <div className="p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
+              <span className="text-text-muted text-[11px] block flex items-center gap-1">
+                <Percent className="w-3 h-3 text-profit" /> Reward %
+              </span>
+              <span className="font-bold text-profit font-mono text-sm">{rewardPercent}% (${calcReward.toFixed(2)})</span>
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Notes Card */}
+      <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-6 space-y-3 shadow-xl">
+        <h2 className="text-sm font-bold text-text-bright flex items-center gap-2 border-b border-white/[0.06] pb-3">
+          <FileText className="w-4 h-4 text-primary" /> Trade Execution Notes & Psychology
+        </h2>
+        <p className="text-xs text-text-secondary leading-relaxed bg-white/[0.02] p-4 rounded-xl border border-white/[0.04]">
+          {trade.notes || 'No execution notes recorded for this position.'}
+        </p>
+      </div>
+
+      {/* Before / After Chart Screenshots */}
+      {(beforeImg || afterImg) && (
+        <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-6 space-y-4 shadow-xl">
+          <h2 className="text-sm font-bold text-text-bright flex items-center gap-2 border-b border-white/[0.06] pb-3">
+            <ImageIcon className="w-4 h-4 text-primary" /> Before & After Chart Screenshots
+          </h2>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {beforeImg && (
+              <div className="space-y-2">
+                <span className="text-xs font-semibold text-text-muted block">Before Entry Chart</span>
+                <div
+                  onClick={() => setSelectedImage(beforeImg)}
+                  className="relative group rounded-xl overflow-hidden border border-white/[0.08] cursor-pointer"
+                >
+                  <img src={beforeImg} alt="Before Entry Chart" className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-300" />
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                    <Maximize2 className="w-6 h-6 text-white" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {afterImg && (
+              <div className="space-y-2">
+                <span className="text-xs font-semibold text-text-muted block">After Exit Chart</span>
+                <div
+                  onClick={() => setSelectedImage(afterImg)}
+                  className="relative group rounded-xl overflow-hidden border border-white/[0.08] cursor-pointer"
+                >
+                  <img src={afterImg} alt="After Exit Chart" className="w-full h-48 object-cover group-hover:scale-105 transition-transform duration-300" />
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                    <Maximize2 className="w-6 h-6 text-white" />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Lightbox Image Preview Modal */}
       {selectedImage && (

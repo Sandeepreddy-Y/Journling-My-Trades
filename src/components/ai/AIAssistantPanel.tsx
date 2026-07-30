@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Sparkles, AlertTriangle, ShieldAlert, CheckCircle, RefreshCw, X } from 'lucide-react';
+import { Sparkles, AlertTriangle, ShieldAlert, CheckCircle, RefreshCw, X, Brain } from 'lucide-react';
+import { useTrades } from '@/hooks';
 
 interface AIInsight {
   id: string;
@@ -10,51 +11,30 @@ interface AIInsight {
   actionableTip: string;
 }
 
-const MOCK_AI_INSIGHTS: AIInsight[] = [
-  {
-    id: '1',
-    category: 'warning',
-    title: 'Revenge Trading Pattern Detected',
-    description: 'After a losing trade on XAU/USD, you entered a subsequent position within 4 minutes with 2x lot size.',
-    severity: 'high',
-    actionableTip: 'Enforce a mandatory 30-minute cooldown rule after any losing execution.',
-  },
-  {
-    id: '2',
-    category: 'habit',
-    title: 'Overtrading During NY Open (14:30 - 15:30 EST)',
-    description: '42% of your total losses occurred during the first 30 minutes of the NY session.',
-    severity: 'medium',
-    actionableTip: 'Wait 15 minutes after session open for initial volatility to settle.',
-  },
-  {
-    id: '3',
-    category: 'setup',
-    title: 'High Edge on Liquidity Grab + FVG',
-    description: 'Your win rate on Liquidity Grab setups is 76.2% with a 2.45 Profit Factor ($9,450 net profit).',
-    severity: 'low',
-    actionableTip: 'Allocate 80% of your risk capital to Liquidity Grab setups.',
-  },
-  {
-    id: '4',
-    category: 'report',
-    title: 'Weekly Performance Report (Jul 24 - Jul 31)',
-    description: 'Net PnL: +$3,420.50 | Win Rate: 68.4% | Max Drawdown: 1.2%. Outstanding discipline!',
-    severity: 'low',
-    actionableTip: 'Keep risk fixed at 1.0% per trade for the upcoming week.',
-  },
-];
-
 export function AIAssistantPanel() {
-  const [insights] = useState<AIInsight[]>(MOCK_AI_INSIGHTS);
+  const { trades } = useTrades();
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isOpen, setIsOpen] = useState(true);
+
+  const hasTrades = trades && trades.length > 0;
+
+  // Compute live AI insights based ONLY on user trades
+  const liveInsights: AIInsight[] = hasTrades ? [
+    {
+      id: '1',
+      category: 'report',
+      title: 'Performance Report',
+      description: `Active executions logged: ${trades.length} positions.`,
+      severity: 'low',
+      actionableTip: 'Maintain strict risk management on all active orders.',
+    }
+  ] : [];
 
   const handleAnalyze = () => {
     setIsAnalyzing(true);
     setTimeout(() => {
       setIsAnalyzing(false);
-    }, 1200);
+    }, 1000);
   };
 
   if (!isOpen) return null;
@@ -97,41 +77,48 @@ export function AIAssistantPanel() {
         </div>
       </div>
 
-      {/* Insights Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {insights.map((item) => (
-          <div
-            key={item.id}
-            className={`p-3.5 rounded-xl border space-y-2 transition-all ${
-              item.severity === 'high'
-                ? 'bg-loss/10 border-loss/30 text-text-bright'
-                : item.severity === 'medium'
-                ? 'bg-warning/10 border-warning/30 text-text-bright'
-                : 'bg-white/[0.02] border-white/[0.06] text-text-bright'
-            }`}
-          >
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-bold flex items-center gap-1.5">
-                {item.severity === 'high' ? (
-                  <ShieldAlert className="w-4 h-4 text-loss shrink-0" />
-                ) : item.severity === 'medium' ? (
-                  <AlertTriangle className="w-4 h-4 text-warning shrink-0" />
-                ) : (
-                  <CheckCircle className="w-4 h-4 text-profit shrink-0" />
-                )}
-                {item.title}
-              </span>
-            </div>
+      {/* Insights Body */}
+      {liveInsights.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {liveInsights.map((item) => (
+            <div
+              key={item.id}
+              className={`p-3.5 rounded-xl border space-y-2 transition-all ${
+                item.severity === 'high'
+                  ? 'bg-loss/10 border-loss/30 text-text-bright'
+                  : item.severity === 'medium'
+                  ? 'bg-warning/10 border-warning/30 text-text-bright'
+                  : 'bg-white/[0.02] border-white/[0.06] text-text-bright'
+              }`}
+            >
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold flex items-center gap-1.5">
+                  {item.severity === 'high' ? (
+                    <ShieldAlert className="w-4 h-4 text-loss shrink-0" />
+                  ) : item.severity === 'medium' ? (
+                    <AlertTriangle className="w-4 h-4 text-warning shrink-0" />
+                  ) : (
+                    <CheckCircle className="w-4 h-4 text-profit shrink-0" />
+                  )}
+                  {item.title}
+                </span>
+              </div>
 
-            <p className="text-xs text-text-secondary leading-relaxed">{item.description}</p>
+              <p className="text-xs text-text-secondary leading-relaxed">{item.description}</p>
 
-            <div className="pt-1 text-[11px] font-medium text-primary flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-primary shrink-0" />
-              <span>Tip: {item.actionableTip}</span>
+              <div className="pt-1 text-[11px] font-medium text-primary flex items-center gap-1">
+                <Sparkles className="w-3 h-3 text-primary shrink-0" />
+                <span>Tip: {item.actionableTip}</span>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div className="p-4 bg-white/[0.02] border border-white/[0.04] rounded-xl flex items-center gap-3 text-xs text-text-muted">
+          <Brain className="w-5 h-5 text-primary shrink-0" />
+          <span>No trading patterns detected yet. Log your first trade execution to enable AI pattern detection & risk warnings.</span>
+        </div>
+      )}
     </div>
   );
 }

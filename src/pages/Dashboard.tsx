@@ -10,6 +10,7 @@ import {
   Plus,
   ArrowUpRight,
   Zap,
+  Layers,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -38,7 +39,7 @@ export default function Dashboard() {
   const { data: analytics } = useAnalytics();
   const { trades } = useTrades();
 
-  const hasTrades = trades.length > 0;
+  const hasTrades = trades && trades.length > 0;
 
   const overview = {
     totalPnl: hasTrades ? analytics.overview.totalPnl : 0,
@@ -46,12 +47,12 @@ export default function Dashboard() {
     winRate: hasTrades ? analytics.overview.winRate : 0,
     profitFactor: hasTrades ? analytics.overview.profitFactor : 0,
     averageRrr: hasTrades ? analytics.overview.averageRrr : 0,
-    currentBalance: hasTrades ? 100000 + analytics.overview.totalPnl : 100000,
+    currentBalance: hasTrades ? 100000 + analytics.overview.totalPnl : 0,
   };
 
   const equityCurveData = hasTrades && analytics.equityCurve.length > 0
     ? analytics.equityCurve
-    : [{ date: 'Start', cumulativePnl: 0, tradeCount: 0 }];
+    : [];
 
   const monthlyData = hasTrades ? analytics.monthlyReturns : [];
 
@@ -136,9 +137,9 @@ export default function Dashboard() {
             {formatPnl(overview.totalPnl)}
           </p>
 
-          <div className="flex items-center gap-1 text-xs text-profit mt-2 font-medium">
+          <div className="flex items-center gap-1 text-xs text-text-muted mt-2 font-medium">
             <ArrowUpRight className="w-3.5 h-3.5" />
-            <span>{hasTrades ? 'Live Performance' : 'Initial Starting Balance'}</span>
+            <span>{hasTrades ? 'Live Performance' : '0% all time'}</span>
           </div>
         </div>
 
@@ -221,8 +222,8 @@ export default function Dashboard() {
           <p className="text-xl font-bold text-text-bright tracking-tight">
             {formatCurrency(overview.currentBalance)}
           </p>
-          <div className="flex items-center gap-1 text-xs text-profit mt-2 font-medium">
-            <span>Starting Capital</span>
+          <div className="flex items-center gap-1 text-xs text-text-muted mt-2 font-medium">
+            <span>Account Balance</span>
           </div>
         </div>
       </div>
@@ -245,24 +246,31 @@ export default function Dashboard() {
 
           {/* Equity Chart Container */}
           <div className="h-72 w-full pt-2">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={equityCurveData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorEquity" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#26A69A" stopOpacity={0.4} />
-                    <stop offset="95%" stopColor="#26A69A" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
-                <XAxis dataKey="date" stroke="#787B86" fontSize={11} tickLine={false} axisLine={{ stroke: '#2A2E39' }} />
-                <YAxis stroke="#787B86" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39', borderRadius: '12px' }}
-                  formatter={(value: any) => [formatPnl(Number(value)), 'Cumulative PnL']}
-                />
-                <Area type="monotone" dataKey="cumulativePnl" stroke="#26A69A" strokeWidth={2.5} fillOpacity={1} fill="url(#colorEquity)" />
-              </AreaChart>
-            </ResponsiveContainer>
+            {equityCurveData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={equityCurveData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorEquity" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#26A69A" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#26A69A" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
+                  <XAxis dataKey="date" stroke="#787B86" fontSize={11} tickLine={false} axisLine={{ stroke: '#2A2E39' }} />
+                  <YAxis stroke="#787B86" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39', borderRadius: '12px' }}
+                    formatter={(value: any) => [formatPnl(Number(value)), 'Cumulative PnL']}
+                  />
+                  <Area type="monotone" dataKey="cumulativePnl" stroke="#26A69A" strokeWidth={2.5} fillOpacity={1} fill="url(#colorEquity)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center space-y-2 text-center text-xs text-text-muted">
+                <Layers className="w-8 h-8 text-white/[0.1]" />
+                <p>No equity curve data available. Log your first trade execution to chart performance.</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -321,22 +329,29 @@ export default function Dashboard() {
           </div>
 
           <div className="h-64 w-full pt-2">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={monthlyData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
-                <XAxis dataKey="month" stroke="#787B86" fontSize={11} tickLine={false} axisLine={{ stroke: '#2A2E39' }} />
-                <YAxis stroke="#787B86" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39', borderRadius: '12px' }}
-                  formatter={(val: any) => [formatPnl(Number(val)), 'Net PnL']}
-                />
-                <Bar dataKey="pnl" radius={[6, 6, 0, 0]}>
-                  {monthlyData.map((entry, idx) => (
-                    <Cell key={idx} fill={entry.pnl >= 0 ? '#26A69A' : '#EF5350'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            {monthlyData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={monthlyData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#2A2E39" vertical={false} />
+                  <XAxis dataKey="month" stroke="#787B86" fontSize={11} tickLine={false} axisLine={{ stroke: '#2A2E39' }} />
+                  <YAxis stroke="#787B86" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(v) => `$${v}`} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#1E222D', borderColor: '#2A2E39', borderRadius: '12px' }}
+                    formatter={(val: any) => [formatPnl(Number(val)), 'Net PnL']}
+                  />
+                  <Bar dataKey="pnl" radius={[6, 6, 0, 0]}>
+                    {monthlyData.map((entry, idx) => (
+                      <Cell key={idx} fill={entry.pnl >= 0 ? '#26A69A' : '#EF5350'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center space-y-2 text-center text-xs text-text-muted">
+                <Layers className="w-8 h-8 text-white/[0.1]" />
+                <p>No monthly PnL data available.</p>
+              </div>
+            )}
           </div>
         </div>
 

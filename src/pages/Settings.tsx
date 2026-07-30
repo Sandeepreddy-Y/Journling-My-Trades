@@ -3,15 +3,16 @@ import { Settings as SettingsIcon, Sun, Moon, Download, FileText, User, Keyboard
 import toast from 'react-hot-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useTrades } from '@/hooks';
 import { exportTradesToCSV, exportTradesToPDF } from '@/lib/exportUtils';
-import { MOCK_RECENT_TRADES } from '@/lib/dummyData';
 
 export default function Settings() {
   const { user, updateUser } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { trades } = useTrades();
 
-  const [displayName, setDisplayName] = useState(user?.displayName || 'John Doe');
-  const [email] = useState(user?.email || 'trader@example.com');
+  const [displayName, setDisplayName] = useState(user?.displayName || 'Trader');
+  const [email] = useState(user?.email || '');
 
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
@@ -108,7 +109,7 @@ export default function Settings() {
             <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
-                onClick={() => exportTradesToCSV(MOCK_RECENT_TRADES)}
+                onClick={() => exportTradesToCSV(trades)}
                 className="flex items-center justify-center gap-2 p-3 bg-white/[0.03] border border-white/[0.06] hover:border-profit/40 text-profit text-xs font-bold rounded-xl transition-all"
               >
                 <Download className="w-4 h-4" />
