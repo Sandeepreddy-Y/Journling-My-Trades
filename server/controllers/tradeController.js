@@ -261,7 +261,7 @@ const getTrades = async (req, res) => {
       trades = memoryDb.trades || [];
     }
 
-    let filtered = trades.filter((t) => t.userId === userId || !pool);
+    let filtered = trades.filter((t) => t.userId === userId);
 
     if (symbol) {
       filtered = filtered.filter((t) => t.symbol.toLowerCase().includes(symbol.toLowerCase()));

@@ -1,11 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import api from '@/lib/axios';
-import { MOCK_RECENT_TRADES } from '@/lib/dummyData';
 import type { Trade } from '@/types';
 
 export function useTrades() {
-  const [trades, setTrades] = useState<Trade[]>(MOCK_RECENT_TRADES);
+  const [trades, setTrades] = useState<Trade[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -14,7 +13,7 @@ export function useTrades() {
     setError(null);
     try {
       const res = await api.get<{ status: string; data: { trades: Trade[] } }>('/trades');
-      if (res.data.data.trades && res.data.data.trades.length > 0) {
+      if (Array.isArray(res.data?.data?.trades)) {
         setTrades(res.data.data.trades);
       }
     } catch (err: any) {

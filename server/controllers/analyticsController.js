@@ -238,7 +238,7 @@ const getAnalytics = async (req, res) => {
       const result = await query('SELECT * FROM trades WHERE user_id = $1 ORDER BY entry_time ASC', [userId]);
       trades = result.rows;
     } else {
-      trades = memoryDb.trades || [];
+      trades = (memoryDb.trades || []).filter((t) => t.userId === userId);
     }
 
     const analyticsData = computeAnalytics(trades);
