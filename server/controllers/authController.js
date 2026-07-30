@@ -62,23 +62,9 @@ const register = async (req, res) => {
     }
 
     if (existingUser) {
-      const accessToken = generateAccessToken(existingUser);
-      const refreshToken = generateRefreshToken(existingUser);
-      setRefreshTokenCookie(res, refreshToken, false);
-      return res.status(200).json({
-        status: 'success',
-        message: 'Account signed in successfully.',
-        data: {
-          user: {
-            id: existingUser.id,
-            email: existingUser.email,
-            displayName: existingUser.display_name || existingUser.displayName || fullName.trim(),
-            avatarUrl: existingUser.avatar_url || existingUser.avatarUrl,
-            role: existingUser.role || 'trader',
-          },
-          token: accessToken,
-          refreshToken,
-        },
+      return res.status(400).json({
+        status: 'error',
+        message: 'An account with this email address already exists. Please sign in.',
       });
     }
 

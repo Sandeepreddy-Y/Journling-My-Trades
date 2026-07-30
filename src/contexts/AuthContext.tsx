@@ -98,49 +98,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // ── Register Action ──
   const register = async (credentials: RegisterCredentials) => {
-    try {
-      const res = await api.post<ApiResponse<{ user: User; token: string; refreshToken: string }>>(
-        '/auth/register',
-        {
-          fullName: credentials.fullName || credentials.displayName,
-          email: credentials.email,
-          password: credentials.password,
-        },
-      );
-      const { user, token, refreshToken } = res.data.data;
-
-      localStorage.setItem('accessToken', token);
-      if (refreshToken) {
-        localStorage.setItem('refreshToken', refreshToken);
-      }
-
-      setState({
-        user,
-        accessToken: token,
-        isAuthenticated: true,
-        isLoading: false,
-      });
-    } catch {
-      // Local fallback for offline/demo registration
-      const mockUser: User = {
-        id: `user-${Date.now()}`,
+    const res = await api.post<ApiResponse<{ user: User; token: string; refreshToken: string }>>(
+      '/auth/register',
+      {
+        fullName: credentials.fullName || credentials.displayName,
         email: credentials.email,
-        displayName: credentials.fullName || credentials.displayName || 'Trader User',
-        avatarUrl: null,
-        timezone: 'UTC',
-        preferredCurrency: 'USD',
-        isVerified: true,
-        createdAt: new Date().toISOString(),
-      };
-      const mockToken = `demo-token-${Date.now()}`;
-      localStorage.setItem('accessToken', mockToken);
-      setState({
-        user: mockUser,
-        accessToken: mockToken,
-        isAuthenticated: true,
-        isLoading: false,
-      });
+        password: credentials.password,
+      },
+    );
+    const { user, token, refreshToken } = res.data.data;
+
+    localStorage.setItem('accessToken', token);
+    if (refreshToken) {
+      localStorage.setItem('refreshToken', refreshToken);
     }
+
+    setState({
+      user,
+      accessToken: token,
+      isAuthenticated: true,
+      isLoading: false,
+    });
   };
 
   // ── Logout Action ──
