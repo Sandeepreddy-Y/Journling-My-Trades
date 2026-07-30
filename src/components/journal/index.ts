@@ -1,0 +1,3 @@
+/**
+ * Journal component barrel export.
+ */

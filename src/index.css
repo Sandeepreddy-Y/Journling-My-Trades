@@ -1,0 +1,234 @@
+@import "tailwindcss";
+
+/* ============================================
+   TradeTrack Pro — Design System
+   TradingView-inspired dark theme
+   ============================================ */
+
+@theme {
+  /* ── Brand Colors ── */
+  --color-primary: #2962FF;
+  --color-primary-hover: #1E4FD9;
+  --color-primary-light: rgba(41, 98, 255, 0.12);
+  --color-primary-glow: rgba(41, 98, 255, 0.25);
+
+  /* ── Semantic Colors ── */
+  --color-profit: #26A69A;
+  --color-profit-light: rgba(38, 166, 154, 0.12);
+  --color-loss: #EF5350;
+  --color-loss-light: rgba(239, 83, 80, 0.12);
+  --color-warning: #FF9800;
+  --color-warning-light: rgba(255, 152, 0, 0.12);
+
+  /* ── Surface Colors (Dark Theme) ── */
+  --color-bg-primary: #0C0E15;
+  --color-bg-secondary: #131722;
+  --color-bg-card: #1E222D;
+  --color-bg-elevated: #252A37;
+  --color-bg-hover: #2A2E39;
+  --color-bg-input: #1A1E2B;
+
+  /* ── Border Colors ── */
+  --color-border: #2A2E39;
+  --color-border-light: #363A45;
+  --color-border-focus: #2962FF;
+
+  /* ── Text Colors ── */
+  --color-text-primary: #D1D4DC;
+  --color-text-secondary: #787B86;
+  --color-text-muted: #4A4E59;
+  --color-text-inverse: #131722;
+  --color-text-bright: #F0F2F5;
+
+  /* ── Font Family ── */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+
+  /* ── Border Radius ── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-full: 9999px;
+}
+
+/* ── Base Styles ── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Scrollbar Styling ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-light);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* ── Selection ── */
+::selection {
+  background-color: var(--color-primary-light);
+  color: var(--color-text-bright);
+}
+
+/* ── Focus Visible ── */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Utility Classes ── */
+@utility glass {
+  background: rgba(30, 34, 45, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(42, 46, 57, 0.5);
+}
+
+@utility text-gradient {
+  background: linear-gradient(135deg, #2962FF, #26A69A);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+@utility animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@utility animate-slide-up {
+  animation: slideUp 0.3s ease-out;
+}
+
+@utility animate-slide-in-right {
+  animation: slideInRight 0.25s ease-out;
+}
+
+@utility animate-pulse-glow {
+  animation: pulseGlow 2s ease-in-out infinite;
+}
+
+/* ── Keyframes ── */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pulseGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 4px var(--color-primary-glow);
+  }
+  50% {
+    box-shadow: 0 0 16px var(--color-primary-glow);
+  }
+}
+
+@keyframes floatOrb {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  25% {
+    transform: translate(30px, -40px) scale(1.05);
+  }
+  50% {
+    transform: translate(-20px, 20px) scale(0.95);
+  }
+  75% {
+    transform: translate(15px, 30px) scale(1.02);
+  }
+}
+
+@keyframes particleFloat {
+  0% {
+    transform: translateY(100vh) rotate(0deg);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.6;
+  }
+  90% {
+    opacity: 0.6;
+  }
+  100% {
+    transform: translateY(-100vh) rotate(720deg);
+    opacity: 0;
+  }
+}
+
+@keyframes authCardEntry {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.97);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+

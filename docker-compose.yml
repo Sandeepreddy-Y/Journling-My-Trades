@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - NODE_ENV=production
+      - DATABASE_URL=postgres://tradetrack:supersecretpassword@postgres:5432/tradetrackdb
+      - JWT_SECRET=production_jwt_secret_key_change_me_in_prod
+      - CLIENT_URL=http://localhost:5000
+    depends_on:
+      - postgres
+    restart: always
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: tradetrack_postgres
+    environment:
+      POSTGRES_USER: tradetrack
+      POSTGRES_PASSWORD: supersecretpassword
+      POSTGRES_DB: tradetrackdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./server/models/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    restart: always
+
+volumes:
+  pgdata:
