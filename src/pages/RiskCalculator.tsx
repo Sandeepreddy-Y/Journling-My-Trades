@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { Calculator, ShieldAlert, Target, Zap } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Calculator, ShieldAlert, Target, Zap, Plus } from 'lucide-react';
 
 export default function RiskCalculator() {
+  const navigate = useNavigate();
   const [accountBalance, setAccountBalance] = useState('100000');
   const [riskPercent, setRiskPercent] = useState('1.0');
   const [entryPrice, setEntryPrice] = useState('2385.50');
@@ -64,14 +66,14 @@ export default function RiskCalculator() {
                 value={accountBalance}
                 onChange={(e) => setAccountBalance(e.target.value)}
                 placeholder="100000"
-                className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-primary/50 text-text-bright font-mono text-xs rounded-xl px-3.5 py-2.5 outline-none font-bold"
+                className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-primary/50 text-text-bright text-xs rounded-xl px-3.5 py-2.5 outline-none font-bold"
               />
             </div>
 
             {/* Risk Percent */}
             <div>
               <label className="text-xs font-semibold text-text-secondary block mb-1">
-                Risk Per Trade (%)
+                Risk Target (%)
               </label>
               <input
                 type="number"
@@ -79,28 +81,32 @@ export default function RiskCalculator() {
                 value={riskPercent}
                 onChange={(e) => setRiskPercent(e.target.value)}
                 placeholder="1.0"
-                className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-primary/50 text-text-bright font-mono text-xs rounded-xl px-3.5 py-2.5 outline-none font-bold"
+                className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-primary/50 text-text-bright text-xs rounded-xl px-3.5 py-2.5 outline-none font-bold"
               />
             </div>
 
-            {/* Instrument Class */}
+            {/* Instrument Type */}
             <div>
-              <label className="text-xs font-semibold text-text-secondary block mb-1">Instrument Class</label>
+              <label className="text-xs font-semibold text-text-secondary block mb-1">
+                Asset Class / Instrument
+              </label>
               <select
                 value={instrument}
                 onChange={(e) => setInstrument(e.target.value as any)}
-                className="w-full bg-white/[0.03] border border-white/[0.08] text-text-primary text-xs rounded-xl px-3.5 py-2.5 outline-none font-medium cursor-pointer"
+                className="w-full bg-white/[0.03] border border-white/[0.08] focus:border-primary/50 text-text-bright text-xs rounded-xl px-3.5 py-2.5 outline-none font-bold capitalize"
               >
-                <option value="gold">Gold (XAU/USD - 100oz contract)</option>
-                <option value="forex">Forex (EUR/USD, GBP/USD - 100k lot)</option>
-                <option value="indices">Indices (NAS100, US30)</option>
+                <option value="gold">Gold (XAU/USD)</option>
+                <option value="forex">Forex Majors (EUR/USD, GBP/USD)</option>
+                <option value="indices">Indices (US30, NAS100)</option>
                 <option value="crypto">Crypto (BTC/USD)</option>
               </select>
             </div>
 
             {/* Entry Price */}
             <div>
-              <label className="text-xs font-semibold text-text-secondary block mb-1">Entry Price</label>
+              <label className="text-xs font-semibold text-text-secondary block mb-1">
+                Planned Entry Price
+              </label>
               <input
                 type="number"
                 step="any"
@@ -112,8 +118,10 @@ export default function RiskCalculator() {
             </div>
 
             {/* Stop Loss Price */}
-            <div>
-              <label className="text-xs font-semibold text-text-secondary block mb-1">Stop Loss Price</label>
+            <div className="sm:col-span-2">
+              <label className="text-xs font-semibold text-text-secondary block mb-1">
+                Stop Loss Price
+              </label>
               <input
                 type="number"
                 step="any"
@@ -128,18 +136,18 @@ export default function RiskCalculator() {
 
         {/* Output Card (1 col) */}
         <div className="bg-bg-card border border-primary/20 bg-primary/[0.02] rounded-2xl p-6 flex flex-col justify-between space-y-4 shadow-xl">
-          <div>
+          <div className="space-y-4">
             <h2 className="text-sm font-bold text-primary flex items-center gap-2 border-b border-primary/20 pb-3">
               <Target className="w-4 h-4" /> Position Size Result
             </h2>
 
-            <div className="space-y-4 pt-4 text-center">
+            <div className="space-y-4 pt-2 text-center">
               <div>
                 <span className="text-[11px] text-text-muted uppercase font-bold tracking-wider block">Recommended Lot Size</span>
                 <p className="text-4xl font-black text-profit font-mono mt-1">{calculatedLots} Lots</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 pt-4 border-t border-white/[0.06] text-xs">
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-white/[0.06] text-xs">
                 <div className="p-3 bg-white/[0.03] rounded-xl border border-white/[0.04]">
                   <span className="text-[10px] text-text-muted block">Risk Amount</span>
                   <span className="font-bold text-loss font-mono">${riskAmount.toFixed(2)}</span>
@@ -151,6 +159,14 @@ export default function RiskCalculator() {
                 </div>
               </div>
             </div>
+
+            <button
+              onClick={() => navigate('/trades/new')}
+              className="w-full py-2.5 bg-primary hover:bg-primary/90 text-white font-bold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Log Trade with Lot Size</span>
+            </button>
           </div>
 
           <div className="p-3 rounded-xl bg-warning/10 border border-warning/20 text-warning text-[11px] flex items-center gap-2">

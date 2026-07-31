@@ -12,6 +12,9 @@ import {
   TrendingUp,
   ChevronsLeft,
   ChevronsRight,
+  BookOpen,
+  Briefcase,
+  Layers,
   X,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
@@ -21,8 +24,11 @@ const NAV_ITEMS = [
   { label: 'Dashboard', path: '/', icon: LayoutDashboard },
   { label: 'Trades', path: '/trades', icon: LineChart },
   { label: 'Analytics', path: '/analytics', icon: BarChart3 },
-  { label: 'Calendar', path: '/calendar', icon: CalendarDays },
+  { label: 'Playbook', path: '/playbook', icon: Layers },
   { label: 'Psychology', path: '/psychology', icon: Brain },
+  { label: 'Calendar', path: '/calendar', icon: CalendarDays },
+  { label: 'Journal', path: '/journal', icon: BookOpen },
+  { label: 'Prop Firm', path: '/prop-firm', icon: Briefcase },
   { label: 'Risk Calculator', path: '/risk-calculator', icon: Calculator },
 ] as const;
 
