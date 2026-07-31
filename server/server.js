@@ -9,6 +9,7 @@ const tradeRoutes = require('./routes/tradeRoutes');
 const analyticsRoutes = require('./routes/analyticsRoutes');
 const propFirmRoutes = require('./routes/propFirmRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
+const strategyRoutes = require('./routes/strategyRoutes');
 const rateLimiter = require('./middleware/rateLimiter');
 
 const app = express();
@@ -19,7 +20,7 @@ app.use(helmet());
 app.use(morgan('dev'));
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: process.env.CLIENT_URL || '*',
     credentials: true,
   })
 );
@@ -46,6 +47,7 @@ app.use('/api/trades', tradeRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/prop-firm', propFirmRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/strategies', strategyRoutes);
 
 // ── Root API Info ──
 app.get('/api', (req, res) => {
@@ -58,6 +60,7 @@ app.get('/api', (req, res) => {
       analytics: '/api/analytics',
       propFirm: '/api/prop-firm',
       upload: '/api/upload',
+      strategies: '/api/strategies',
     },
   });
 });
@@ -87,7 +90,7 @@ if (process.env.NODE_ENV !== 'test') {
       🔗 Health Check: http://localhost:${PORT}/health
       🔑 Auth Endpoints: http://localhost:${PORT}/api/auth
       📈 Trade Endpoints: http://localhost:${PORT}/api/trades
-      📸 Upload Endpoints: http://localhost:${PORT}/api/upload
+      ⚡ Strategy Endpoints: http://localhost:${PORT}/api/strategies
     `);
   });
 }

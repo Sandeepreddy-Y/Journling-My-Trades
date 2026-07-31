@@ -18,6 +18,10 @@ export interface AnalyticsData {
     maxDrawdownPercent: number;
     consecutiveWins: number;
     consecutiveLosses: number;
+    sharpeRatio: number;
+    sortinoRatio: number;
+    calmarRatio: number;
+    avgHoldTimeHours: number;
     bestSetup: string;
     worstSetup: string;
     bestSession: string;
@@ -47,6 +51,10 @@ const DEFAULT_ZERO_ANALYTICS: AnalyticsData = {
     maxDrawdownPercent: 0,
     consecutiveWins: 0,
     consecutiveLosses: 0,
+    sharpeRatio: 0,
+    sortinoRatio: 0,
+    calmarRatio: 0,
+    avgHoldTimeHours: 0,
     bestSetup: 'N/A',
     worstSetup: 'N/A',
     bestSession: 'N/A',

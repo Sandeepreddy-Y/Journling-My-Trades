@@ -3,6 +3,11 @@ import {
   TrendingUp,
   RefreshCw,
   Layers,
+  Award,
+  Clock,
+  ShieldAlert,
+  Flame,
+  Zap,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -35,7 +40,14 @@ interface AnalyticsData {
     expectancy: number;
     maxDrawdown: number;
     maxDrawdownPercent: number;
+    consecutiveWins: number;
+    consecutiveLosses: number;
+    sharpeRatio: number;
+    sortinoRatio: number;
+    calmarRatio: number;
+    avgHoldTimeHours: number;
     bestSetup: string;
+    worstSetup: string;
     bestSession: string;
     worstSession: string;
   };
@@ -61,7 +73,14 @@ const DEFAULT_ZERO_ANALYTICS: AnalyticsData = {
     expectancy: 0,
     maxDrawdown: 0,
     maxDrawdownPercent: 0,
+    consecutiveWins: 0,
+    consecutiveLosses: 0,
+    sharpeRatio: 0,
+    sortinoRatio: 0,
+    calmarRatio: 0,
+    avgHoldTimeHours: 0,
     bestSetup: 'N/A',
+    worstSetup: 'N/A',
     bestSession: 'N/A',
     worstSession: 'N/A',
   },
@@ -98,6 +117,10 @@ export default function Analytics() {
 
   useEffect(() => {
     fetchAnalytics();
+
+    const handleUpdate = () => fetchAnalytics();
+    window.addEventListener('trades-updated', handleUpdate);
+    return () => window.removeEventListener('trades-updated', handleUpdate);
   }, []);
 
   const overview = data.overview;
@@ -125,15 +148,15 @@ export default function Analytics() {
         <div>
           <div className="flex items-center gap-2">
             <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-primary border border-primary/20 flex items-center gap-1">
-              <TrendingUp className="w-3.5 h-3.5" /> Quantitative Engine
+              <TrendingUp className="w-3.5 h-3.5" /> Quantitative Analytics Engine
             </span>
             <span className="text-xs text-text-muted">{overview.totalTrades} total executions analyzed</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-text-bright tracking-tight mt-1">
-            Performance Analytics Engine
+            Performance Analytics & Risk Ratios
           </h1>
           <p className="text-sm text-text-secondary mt-0.5">
-            Deep-dive metrics: Win Rate, Profit Factor, Expectancy, Drawdown, Streaks, and Setups.
+            Deep-dive metrics: Sharpe, Sortino, Calmar Ratios, Expectancy, Hold Time, and Drawdown.
           </p>
         </div>
 
@@ -147,7 +170,7 @@ export default function Analytics() {
         </button>
       </div>
 
-      {/* ── Metric Cards ── */}
+      {/* ── Top Metric Cards (Row 1) ── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-5 shadow-xl space-y-2">
           <span className="text-xs text-text-muted uppercase font-bold tracking-wider block">Net Total PnL</span>
@@ -178,6 +201,45 @@ export default function Analytics() {
         </div>
       </div>
 
+      {/* ── Risk-Adjusted Quantitative Ratios (Row 2) ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-4 shadow-xl space-y-1">
+          <div className="flex items-center justify-between text-xs text-text-muted font-bold">
+            <span>Sharpe Ratio</span>
+            <Award className="w-4 h-4 text-primary" />
+          </div>
+          <p className="text-xl font-bold text-text-bright font-mono">{overview.sharpeRatio || '0.00'}</p>
+          <span className="text-[10px] text-text-muted block">Risk-adjusted return ratio</span>
+        </div>
+
+        <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-4 shadow-xl space-y-1">
+          <div className="flex items-center justify-between text-xs text-text-muted font-bold">
+            <span>Sortino Ratio</span>
+            <Zap className="w-4 h-4 text-profit" />
+          </div>
+          <p className="text-xl font-bold text-text-bright font-mono">{overview.sortinoRatio || '0.00'}</p>
+          <span className="text-[10px] text-text-muted block">Downside volatility ratio</span>
+        </div>
+
+        <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-4 shadow-xl space-y-1">
+          <div className="flex items-center justify-between text-xs text-text-muted font-bold">
+            <span>Max Drawdown</span>
+            <ShieldAlert className="w-4 h-4 text-loss" />
+          </div>
+          <p className="text-xl font-bold text-loss font-mono">{overview.maxDrawdownPercent}% (${overview.maxDrawdown})</p>
+          <span className="text-[10px] text-text-muted block">Peak-to-trough decline</span>
+        </div>
+
+        <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-4 shadow-xl space-y-1">
+          <div className="flex items-center justify-between text-xs text-text-muted font-bold">
+            <span>Avg Hold Duration</span>
+            <Clock className="w-4 h-4 text-warning" />
+          </div>
+          <p className="text-xl font-bold text-text-bright font-mono">{overview.avgHoldTimeHours} hrs</p>
+          <span className="text-[10px] text-text-muted block">Average execution time</span>
+        </div>
+      </div>
+
       {/* ── Charts Grid ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Cumulative Equity Curve (2 cols) */}
@@ -188,6 +250,10 @@ export default function Analytics() {
                 Cumulative Equity Curve
               </h2>
               <p className="text-xs text-text-muted">Account balance progression over time</p>
+            </div>
+            <div className="flex items-center gap-3 text-xs font-mono font-bold">
+              <span className="text-profit flex items-center gap-1"><Flame className="w-3.5 h-3.5" /> Max Win Streak: {overview.consecutiveWins}</span>
+              <span className="text-loss flex items-center gap-1">Max Loss Streak: {overview.consecutiveLosses}</span>
             </div>
           </div>
 

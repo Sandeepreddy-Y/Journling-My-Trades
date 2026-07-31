@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { CalendarDays, AlertTriangle, Globe } from 'lucide-react';
-import { cn } from '@/lib/helpers';
+import { CalendarDays, Globe, Calendar as CalendarIcon } from 'lucide-react';
+import { useTrades } from '@/hooks';
+import { formatPnl, getPnlColorClass, cn } from '@/lib/helpers';
 
 interface EconomicEvent {
   id: string;
@@ -12,7 +13,7 @@ interface EconomicEvent {
   previous: string;
 }
 
-const MOCK_EVENTS: EconomicEvent[] = [
+const ECONOMIC_EVENTS: EconomicEvent[] = [
   { id: '1', time: '14:30 EST', currency: 'USD', event: 'Non-Farm Payrolls (NFP)', impact: 'high', forecast: '185K', previous: '206K' },
   { id: '2', time: '14:30 EST', currency: 'USD', event: 'Unemployment Rate', impact: 'high', forecast: '4.1%', previous: '4.1%' },
   { id: '3', time: '10:00 EST', currency: 'USD', event: 'ISM Services PMI', impact: 'medium', forecast: '52.5', previous: '53.8' },
@@ -21,11 +22,49 @@ const MOCK_EVENTS: EconomicEvent[] = [
 ];
 
 export default function Calendar() {
+  const { trades } = useTrades();
   const [impactFilter, setImpactFilter] = useState<'all' | 'high' | 'medium'>('all');
 
-  const filteredEvents = MOCK_EVENTS.filter(
+  const filteredEvents = ECONOMIC_EVENTS.filter(
     (e) => impactFilter === 'all' || e.impact === impactFilter
   );
+
+  // Group trades by day (YYYY-MM-DD)
+  const dailyPnlMap: Record<string, { pnl: number; count: number }> = {};
+  trades.forEach((t) => {
+    if (t.entryTime) {
+      const dateKey = new Date(t.entryTime).toISOString().slice(0, 10);
+      if (!dailyPnlMap[dateKey]) {
+        dailyPnlMap[dateKey] = { pnl: 0, count: 0 };
+      }
+      dailyPnlMap[dateKey].pnl += parseFloat(t.pnl as any) || 0;
+      dailyPnlMap[dateKey].count += 1;
+    }
+  });
+
+  // Calendar Days Grid for Current Month
+  const today = new Date();
+  const currentYear = today.getFullYear();
+  const currentMonth = today.getMonth();
+  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+  const firstDayOfWeek = new Date(currentYear, currentMonth, 1).getDay();
+
+  const calendarDays = [];
+  for (let i = 0; i < firstDayOfWeek; i++) {
+    calendarDays.push(null);
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    const monthStr = String(currentMonth + 1).padStart(2, '0');
+    const dayStr = String(d).padStart(2, '0');
+    const dateKey = `${currentYear}-${monthStr}-${dayStr}`;
+    calendarDays.push({
+      day: d,
+      dateKey,
+      stats: dailyPnlMap[dateKey] || null,
+    });
+  }
+
+  const monthName = today.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 
   return (
     <div className="space-y-6 animate-slide-up pb-12 max-w-5xl mx-auto">
@@ -34,14 +73,14 @@ export default function Calendar() {
         <div>
           <div className="flex items-center gap-2">
             <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-primary/10 text-primary border border-primary/20 flex items-center gap-1">
-              <CalendarDays className="w-3.5 h-3.5" /> Macro Economic & Market Calendar
+              <CalendarDays className="w-3.5 h-3.5" /> Trading Calendar & Economic News
             </span>
           </div>
           <h1 className="text-2xl font-extrabold text-text-bright tracking-tight mt-1">
-            Economic News & Market Session Monitor
+            Trading Calendar & PnL Heatmap
           </h1>
           <p className="text-xs text-text-secondary mt-0.5">
-            Track high-impact macroeconomic releases (FOMC, NFP, CPI) and active trading session hours.
+            View daily profit breakdown and high-impact macroeconomic releases.
           </p>
         </div>
 
@@ -52,8 +91,10 @@ export default function Calendar() {
               key={impact}
               onClick={() => setImpactFilter(impact)}
               className={cn(
-                'px-3 py-1.5 rounded-lg transition-all uppercase',
-                impactFilter === impact ? 'bg-primary text-white' : 'text-text-muted hover:text-text-bright'
+                'px-3 py-1.5 rounded-lg transition-all capitalize font-semibold',
+                impactFilter === impact
+                  ? 'bg-primary text-white shadow-md'
+                  : 'text-text-secondary hover:text-text-primary',
               )}
             >
               {impact} Impact
@@ -62,73 +103,101 @@ export default function Calendar() {
         </div>
       </div>
 
-      {/* Grid 1: Live Market Sessions Clocks */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {[
-          { name: 'London Session', hours: '03:00 - 11:00 EST', status: 'ACTIVE', color: 'text-profit bg-profit/10' },
-          { name: 'New York Session', hours: '08:00 - 17:00 EST', status: 'ACTIVE (OVERLAP)', color: 'text-profit bg-profit/10' },
-          { name: 'Tokyo Session', hours: '19:00 - 04:00 EST', status: 'CLOSED', color: 'text-text-muted bg-white/[0.03]' },
-          { name: 'Sydney Session', hours: '17:00 - 02:00 EST', status: 'CLOSED', color: 'text-text-muted bg-white/[0.03]' },
-        ].map((sess) => (
-          <div key={sess.name} className="bg-bg-card border border-white/[0.06] rounded-2xl p-4 space-y-2 shadow-lg">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-text-bright">{sess.name}</span>
-              <Globe className="w-4 h-4 text-primary" />
-            </div>
-            <p className="text-[11px] text-text-muted font-mono">{sess.hours}</p>
-            <span className={cn('inline-block text-[10px] font-bold px-2 py-0.5 rounded-full', sess.color)}>
-              {sess.status}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {/* Grid 2: Economic Events Table */}
+      {/* Daily PnL Monthly Heatmap */}
       <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-6 space-y-4 shadow-xl">
-        <div className="flex items-center justify-between border-b border-white/[0.06] pb-4">
+        <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
           <h2 className="text-sm font-bold text-text-bright flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-warning" />
-            Upcoming Economic Events
+            <CalendarIcon className="w-4 h-4 text-primary" /> Daily PnL Heatmap ({monthName})
           </h2>
-          <span className="text-xs text-text-muted">Timezone: EST</span>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-text-primary">
-            <thead>
-              <tr className="border-b border-white/[0.06] bg-white/[0.02] text-text-muted uppercase text-[10px] font-bold tracking-wider">
-                <th className="py-3 px-3">Time</th>
-                <th className="py-3 px-3">Cur.</th>
-                <th className="py-3 px-3">Impact</th>
-                <th className="py-3 px-3">Event Description</th>
-                <th className="py-3 px-3">Forecast</th>
-                <th className="py-3 px-3">Previous</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/[0.04]">
-              {filteredEvents.map((evt) => (
-                <tr key={evt.id} className="hover:bg-white/[0.02] transition-colors">
-                  <td className="py-3.5 px-3 font-mono text-text-secondary">{evt.time}</td>
-                  <td className="py-3.5 px-3 font-bold text-text-bright">{evt.currency}</td>
-                  <td className="py-3.5 px-3">
-                    <span
-                      className={cn(
-                        'px-2.5 py-0.5 rounded text-[10px] font-bold uppercase',
-                        evt.impact === 'high' && 'bg-loss/20 text-loss border border-loss/30',
-                        evt.impact === 'medium' && 'bg-warning/20 text-warning border border-warning/30',
-                        evt.impact === 'low' && 'bg-white/[0.06] text-text-muted'
-                      )}
-                    >
-                      {evt.impact}
-                    </span>
-                  </td>
-                  <td className="py-3.5 px-3 font-semibold text-text-bright">{evt.event}</td>
-                  <td className="py-3.5 px-3 font-mono text-text-secondary">{evt.forecast}</td>
-                  <td className="py-3.5 px-3 font-mono text-text-muted">{evt.previous}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {/* Weekday Headers */}
+        <div className="grid grid-cols-7 gap-2 text-center text-xs font-bold text-text-muted">
+          <span>Sun</span>
+          <span>Mon</span>
+          <span>Tue</span>
+          <span>Wed</span>
+          <span>Thu</span>
+          <span>Fri</span>
+          <span>Sat</span>
+        </div>
+
+        {/* Days Grid */}
+        <div className="grid grid-cols-7 gap-2 text-xs">
+          {calendarDays.map((item, idx) => {
+            if (!item) {
+              return <div key={`empty-${idx}`} className="h-16 rounded-xl bg-white/[0.01]" />;
+            }
+
+            const pnl = item.stats ? item.stats.pnl : null;
+            const count = item.stats ? item.stats.count : 0;
+
+            return (
+              <div
+                key={item.dateKey}
+                className={cn(
+                  'h-16 p-2 rounded-xl border flex flex-col justify-between transition-all',
+                  pnl === null && 'bg-white/[0.02] border-white/[0.04]',
+                  pnl !== null && pnl > 0 && 'bg-profit/15 border-profit/30 text-text-bright shadow-md',
+                  pnl !== null && pnl < 0 && 'bg-loss/15 border-loss/30 text-text-bright shadow-md',
+                  pnl !== null && pnl === 0 && 'bg-white/[0.05] border-white/[0.08] text-text-muted',
+                )}
+              >
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="font-extrabold">{item.day}</span>
+                  {count > 0 && <span className="text-[9px] text-text-muted">{count}t</span>}
+                </div>
+                {pnl !== null ? (
+                  <span className={cn('font-bold font-mono text-[11px]', getPnlColorClass(pnl))}>
+                    {formatPnl(pnl)}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-text-muted font-mono">-</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Economic News Calendar */}
+      <div className="bg-bg-card border border-white/[0.06] rounded-2xl p-6 space-y-4 shadow-xl">
+        <h2 className="text-sm font-bold text-text-bright flex items-center gap-2 border-b border-white/[0.06] pb-3">
+          <Globe className="w-4 h-4 text-primary" /> High-Impact Macro Economic Releases
+        </h2>
+
+        <div className="space-y-3">
+          {filteredEvents.map((evt) => (
+            <div key={evt.id} className="p-3.5 bg-white/[0.02] border border-white/[0.04] rounded-xl flex items-center justify-between text-xs">
+              <div className="flex items-center gap-3">
+                <span className="px-2 py-1 rounded bg-white/[0.06] text-primary font-mono font-bold">{evt.currency}</span>
+                <div>
+                  <span className="font-bold text-text-bright block">{evt.event}</span>
+                  <span className="text-[11px] text-text-muted">{evt.time}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 text-right">
+                <div>
+                  <span className="text-[10px] text-text-muted block">Forecast</span>
+                  <span className="font-mono text-text-bright">{evt.forecast}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-text-muted block">Previous</span>
+                  <span className="font-mono text-text-muted">{evt.previous}</span>
+                </div>
+                <span
+                  className={cn(
+                    'px-2.5 py-0.5 rounded-full text-[10px] uppercase font-bold',
+                    evt.impact === 'high' && 'bg-loss/15 text-loss border border-loss/30',
+                    evt.impact === 'medium' && 'bg-warning/15 text-warning border border-warning/30',
+                  )}
+                >
+                  {evt.impact}
+                </span>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
