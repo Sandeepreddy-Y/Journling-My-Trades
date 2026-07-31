@@ -23,7 +23,7 @@ string   g_queueFilename      = "tradetrack_queue.txt";
 string   g_stateFilename      = "tradetrack_state.txt";
 ulong    g_syncedTickets[];   // Session ticket cache to prevent duplicate network calls
 
-// --- Function Prototypes ---
+// --- Forward Function Prototypes ---
 void LoadSyncState();
 void SaveSyncState();
 bool IsTicketAlreadySynced(ulong ticket);
@@ -38,6 +38,93 @@ void QueueTradeLocally(string jsonPayload);
 void ProcessOfflineQueue();
 
 //+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   Print("[TradeTrackPro EA] Initializing Real-Time Auto Sync EA v1.0.0...");
+
+   if(InpApiKey == "" || InpApiKey == "YOUR_API_KEY_HERE")
+   {
+      Alert("[TradeTrackPro EA] ERROR: Please enter your valid API Key in EA inputs!");
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+
+   // 1. Load Last Synced Ticket State from Terminal Storage / File
+   LoadSyncState();
+
+   // 2. Enable Timer for continuous sync retries and heartbeats (every 5s)
+   EventSetTimer(5);
+
+   // 3. Send Initial Heartbeat
+   SendHeartbeat();
+
+   // 4. Perform Initial Account History Sync (One-time on startup)
+   SyncAccountHistory();
+
+   Print("[TradeTrackPro EA] EA initialized successfully. Monitoring MT5 account #", IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)));
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   EventKillTimer();
+   SaveSyncState();
+   ArrayFree(g_syncedTickets);
+   Print("[TradeTrackPro EA] EA Deinitialized. Reason code: ", IntegerToString(reason));
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   ScanAndSyncClosedTrades();
+}
+
+//+------------------------------------------------------------------+
+//| Timer event function                                             |
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+   datetime now = TimeCurrent();
+
+   if(now - g_lastHeartbeat >= InpHeartbeatSec)
+   {
+      SendHeartbeat();
+      g_lastHeartbeat = now;
+   }
+
+   ProcessOfflineQueue();
+}
+
+//+------------------------------------------------------------------+
+//| Trade Transaction event                                          |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction& trans,
+                        const MqlTradeRequest& request,
+                        const MqlTradeResult& result)
+{
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
+   {
+      Print("[TradeTrackPro EA] Live Trade Detected: Deal #", IntegerToString((long)trans.deal));
+      ScanAndSyncClosedTrades();
+   }
+   else if(trans.type == TRADE_TRANSACTION_POSITION)
+   {
+      Print("[TradeTrackPro EA] Live Trade Detected: Position Modified #", IntegerToString((long)trans.position));
+      ScanAndSyncClosedTrades();
+   }
+   else if(trans.type == TRADE_TRANSACTION_ORDER_ADD)
+   {
+      Print("[TradeTrackPro EA] Live Trade Detected: Order Added #", IntegerToString((long)trans.order));
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Load Last Synced Ticket State from Global Variable / File       |
 //+------------------------------------------------------------------+
 void LoadSyncState()
@@ -50,7 +137,7 @@ void LoadSyncState()
 
    if(FileIsExist(g_stateFilename))
    {
-      int handle = FileOpen(g_stateFilename, FILE_READ|FILE_TXT|FILE_ANSI);
+      int handle = FileOpen(g_stateFilename, FILE_READ|FILE_ANSI);
       if(handle != INVALID_HANDLE)
       {
          string line = FileReadString(handle);
@@ -73,7 +160,7 @@ void SaveSyncState()
    string gvName = "TTP_LAST_SYNCED_TICKET_" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN));
    GlobalVariableSet(gvName, (double)g_lastSyncedTicket);
 
-   int handle = FileOpen(g_stateFilename, FILE_WRITE|FILE_TXT|FILE_ANSI);
+   int handle = FileOpen(g_stateFilename, FILE_WRITE|FILE_ANSI);
    if(handle != INVALID_HANDLE)
    {
       FileWriteString(handle, IntegerToString((long)g_lastSyncedTicket));
@@ -468,7 +555,7 @@ void ScanAndSyncClosedTrades()
 //+------------------------------------------------------------------+
 void QueueTradeLocally(string jsonPayload)
 {
-   int fileHandle = FileOpen(g_queueFilename, FILE_READ|FILE_WRITE|FILE_TXT|FILE_ANSI);
+   int fileHandle = FileOpen(g_queueFilename, FILE_READ|FILE_WRITE|FILE_ANSI);
    if(fileHandle != INVALID_HANDLE)
    {
       FileSeek(fileHandle, 0, SEEK_END);
@@ -485,7 +572,7 @@ void ProcessOfflineQueue()
 {
    if(!FileIsExist(g_queueFilename)) return;
 
-   int fileHandle = FileOpen(g_queueFilename, FILE_READ|FILE_TXT|FILE_ANSI);
+   int fileHandle = FileOpen(g_queueFilename, FILE_READ|FILE_ANSI);
    if(fileHandle == INVALID_HANDLE) return;
 
    string lines[];
@@ -537,7 +624,7 @@ void ProcessOfflineQueue()
    }
    else
    {
-      int newFile = FileOpen(g_queueFilename, FILE_WRITE|FILE_TXT|FILE_ANSI);
+      int newFile = FileOpen(g_queueFilename, FILE_WRITE|FILE_ANSI);
       if(newFile != INVALID_HANDLE)
       {
          for(int k = 0; k < remainingCount; k++)
@@ -546,93 +633,6 @@ void ProcessOfflineQueue()
          }
          FileClose(newFile);
       }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Expert initialization function                                   |
-//+------------------------------------------------------------------+
-int OnInit()
-{
-   Print("[TradeTrackPro EA] Initializing Real-Time Auto Sync EA v1.0.0...");
-
-   if(InpApiKey == "" || InpApiKey == "YOUR_API_KEY_HERE")
-   {
-      Alert("[TradeTrackPro EA] ERROR: Please enter your valid API Key in EA inputs!");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-
-   // 1. Load Last Synced Ticket State from Terminal Storage / File
-   LoadSyncState();
-
-   // 2. Enable Timer for continuous sync retries and heartbeats (every 5s)
-   EventSetTimer(5);
-
-   // 3. Send Initial Heartbeat
-   SendHeartbeat();
-
-   // 4. Perform Initial Account History Sync (One-time on startup)
-   SyncAccountHistory();
-
-   Print("[TradeTrackPro EA] EA initialized successfully. Monitoring MT5 account #", IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)));
-   return(INIT_SUCCEEDED);
-}
-
-//+------------------------------------------------------------------+
-//| Expert deinitialization function                                 |
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-   EventKillTimer();
-   SaveSyncState();
-   ArrayFree(g_syncedTickets);
-   Print("[TradeTrackPro EA] EA Deinitialized. Reason code: ", IntegerToString(reason));
-}
-
-//+------------------------------------------------------------------+
-//| Expert tick function                                             |
-//+------------------------------------------------------------------+
-void OnTick()
-{
-   ScanAndSyncClosedTrades();
-}
-
-//+------------------------------------------------------------------+
-//| Timer event function                                             |
-//+------------------------------------------------------------------+
-void OnTimer()
-{
-   datetime now = TimeCurrent();
-
-   if(now - g_lastHeartbeat >= InpHeartbeatSec)
-   {
-      SendHeartbeat();
-      g_lastHeartbeat = now;
-   }
-
-   ProcessOfflineQueue();
-}
-
-//+------------------------------------------------------------------+
-//| Trade Transaction event                                          |
-//+------------------------------------------------------------------+
-void OnTradeTransaction(const MqlTradeTransaction& trans,
-                        const MqlTradeRequest& request,
-                        const MqlTradeResult& result)
-{
-   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
-   {
-      Print("[TradeTrackPro EA] Live Trade Detected: Deal #", IntegerToString((long)trans.deal));
-      ScanAndSyncClosedTrades();
-   }
-   else if(trans.type == TRADE_TRANSACTION_POSITION)
-   {
-      Print("[TradeTrackPro EA] Live Trade Detected: Position Modified #", IntegerToString((long)trans.position));
-      ScanAndSyncClosedTrades();
-   }
-   else if(trans.type == TRADE_TRANSACTION_ORDER_ADD)
-   {
-      Print("[TradeTrackPro EA] Live Trade Detected: Order Added #", IntegerToString((long)trans.order));
    }
 }
 //+------------------------------------------------------------------+
