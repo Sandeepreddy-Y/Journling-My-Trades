@@ -106,7 +106,7 @@ const receiveHeartbeat = async (req, res) => {
     }
 
     const account = accResult.rows[0];
-    const { accountNumber, broker, server, terminalId, eaVersion, currency } = req.body;
+    const { accountNumber, broker, server, terminalId, eaVersion, currency, lastSyncedTicket, openPositionsCount } = req.body;
 
     await query(
       `UPDATE broker_accounts SET
@@ -126,13 +126,19 @@ const receiveHeartbeat = async (req, res) => {
     // Audit log
     await query(
       `INSERT INTO sync_logs (broker_account_id, event_type, message, details)
-       VALUES ($1, 'Heartbeat', $2, $3)`,
-      [account.id, `Heartbeat received from MT5 Account #${accountNumber || 'Unknown'}`, req.body]
+       VALUES ($1, 'Heartbeat Sent', $2, $3)`,
+      [
+        account.id,
+        `Heartbeat Sent from MT5 Account #${accountNumber || 'Unknown'} (LastTicket: #${lastSyncedTicket || 0}, OpenPositions: ${openPositionsCount || 0})`,
+        req.body,
+      ]
     );
+
+    console.log(`[Sync] 💓 Heartbeat Sent for account #${accountNumber || 'Unknown'} (LastTicket: ${lastSyncedTicket || 0})`);
 
     return res.status(200).json({
       status: 'success',
-      message: 'Heartbeat received successfully',
+      message: 'Heartbeat Sent acknowledged by server',
       serverTime: new Date().toISOString(),
     });
   } catch (error) {
@@ -142,7 +148,7 @@ const receiveHeartbeat = async (req, res) => {
 };
 
 /**
- * EA Trade Sync Submission
+ * EA Trade Sync Submission (Supports Live and Historical Trades)
  */
 const syncTrade = async (req, res) => {
   try {
@@ -176,6 +182,7 @@ const syncTrade = async (req, res) => {
     const exitTime = tradeData.exitTime || new Date().toISOString();
     const accountNumber = tradeData.accountNumber || account.account_number || 'MT5 Account';
     const broker = tradeData.broker || account.broker || 'MetaTrader 5';
+    const tradeStatus = tradeData.status === 'open' ? 'open' : 'closed';
 
     if (!ticket || !symbol || entryPrice <= 0) {
       return res.status(400).json({ status: 'error', message: 'Missing required trade payload fields (ticket, symbol, entryPrice).' });
@@ -188,13 +195,13 @@ const syncTrade = async (req, res) => {
     );
 
     if (syncCheck.rows.length > 0) {
-      console.log(`[Sync] Duplicate trade ticket #${ticket} ignored for account #${accountNumber}`);
+      console.log(`[Sync] Duplicate Ignored for trade ticket #${ticket} on account #${accountNumber}`);
       await query(
         `INSERT INTO sync_logs (broker_account_id, event_type, message, details)
          VALUES ($1, 'Duplicate Ignored', $2, $3)`,
-        [account.id, `Ticket #${ticket} already synced for Account #${accountNumber}`, tradeData]
+        [account.id, `Duplicate Ignored for ticket #${ticket} (Account #${accountNumber})`, tradeData]
       );
-      return res.status(200).json({ status: 'success', message: 'Trade ticket already synced', duplicate: true });
+      return res.status(200).json({ status: 'success', message: 'Duplicate Ignored', duplicate: true });
     }
 
     // ── 2. Check Duplicate in trades table ──
@@ -205,11 +212,12 @@ const syncTrade = async (req, res) => {
 
     if (dupTradeCheck.rows.length > 0) {
       await query('INSERT INTO trade_sync_history (broker_account_id, ticket, symbol) VALUES ($1, $2, $3)', [account.id, ticket, symbol]);
-      return res.status(200).json({ status: 'success', message: 'Trade execution already present in journal', duplicate: true });
+      console.log(`[Sync] Duplicate Ignored (matched by entry_time and symbol) for ticket #${ticket}`);
+      return res.status(200).json({ status: 'success', message: 'Duplicate Ignored', duplicate: true });
     }
 
     // ── 3. Insert Trade into PostgreSQL ──
-    const outcome = profit > 0 ? 'win' : profit < 0 ? 'loss' : 'breakeven';
+    const outcome = tradeStatus === 'open' ? 'open' : profit > 0 ? 'win' : profit < 0 ? 'loss' : 'breakeven';
     const cleanSym = symbol.replace(/[^A-Z0-9/]/gi, '');
 
     const insertResult = await query(
@@ -225,7 +233,7 @@ const syncTrade = async (req, res) => {
         detectAssetClass(cleanSym),
         direction,
         entryPrice,
-        exitPrice,
+        tradeStatus === 'open' ? null : exitPrice,
         volume,
         stopLoss > 0 ? stopLoss : null,
         takeProfit > 0 ? takeProfit : null,
@@ -233,17 +241,17 @@ const syncTrade = async (req, res) => {
         takeProfit > 0 ? Math.abs(takeProfit - entryPrice) * volume * 100 : null,
         2.0,
         entryTime,
-        exitTime,
+        tradeStatus === 'open' ? null : exitTime,
         commission,
         swap,
-        profit,
+        tradeStatus === 'open' ? null : profit,
         outcome,
         'disciplined',
         5,
         `Auto Synced via MT5 EA (Ticket #${ticket})`,
         detectSession(entryTime),
         'MT5 Auto Sync',
-        'closed',
+        tradeStatus,
       ]
     );
 
@@ -256,8 +264,8 @@ const syncTrade = async (req, res) => {
 
     await query(
       `INSERT INTO sync_logs (broker_account_id, event_type, message, details)
-       VALUES ($1, 'Trade Inserted', $2, $3)`,
-      [account.id, `Successfully synced trade ticket #${ticket} (${cleanSym} ${direction} PnL: $${profit})`, tradeData]
+       VALUES ($1, 'Trade Uploaded', $2, $3)`,
+      [account.id, `Trade Uploaded successfully for ticket #${ticket} (${cleanSym} ${direction} PnL: $${profit})`, tradeData]
     );
 
     const createdTrade = mapRowToTrade(insertResult.rows[0]);
@@ -268,15 +276,15 @@ const syncTrade = async (req, res) => {
       io.emit('trade:synced', {
         userId: account.user_id,
         trade: createdTrade,
-        message: `New trade synced: ${cleanSym} (${direction.toUpperCase()}) PnL: $${profit.toFixed(2)}`,
+        message: `Trade Uploaded: ${cleanSym} (${direction.toUpperCase()}) PnL: $${profit.toFixed(2)}`,
       });
     }
 
-    console.log(`[Sync] ✅ Successfully synced MT5 trade ticket #${ticket} for user ${account.user_id}`);
+    console.log(`[Sync] ✅ Trade Uploaded for MT5 ticket #${ticket} (User: ${account.user_id})`);
 
     return res.status(201).json({
       status: 'success',
-      message: 'Trade synced successfully.',
+      message: 'Trade Uploaded successfully.',
       data: { trade: createdTrade },
     });
   } catch (error) {
