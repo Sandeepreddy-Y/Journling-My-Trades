@@ -22,7 +22,7 @@ const getBaseUrl = (): string => {
  */
 const api = axios.create({
   baseURL: getBaseUrl(),
-  timeout: 15000,
+  timeout: 30000, // 30s timeout to accommodate Render backend cold starts
   headers: {
     'Content-Type': 'application/json',
   },
@@ -86,7 +86,7 @@ api.interceptors.response.use(
     return response;
   },
   async (error: AxiosError) => {
-    const status = error.response?.status || 'Network/CORS Error';
+    const status = error.response?.status || 'Network/CORS/Timeout Error';
     console.error(`[API Response Error] Status: ${status} (${error.config?.method?.toUpperCase()} ${error.config?.url})`);
     if (error.response?.data) {
       console.error('[API Response Body]:', error.response.data);

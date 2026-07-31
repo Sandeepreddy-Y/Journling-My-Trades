@@ -123,7 +123,7 @@ export default function Register() {
       toast.success('Account created successfully!');
       navigate('/');
     } catch (err: any) {
-      const msg = err.response?.data?.message || 'Registration failed. Please try again.';
+      const msg = err.response?.data?.message || err.message || 'Registration failed. Please check network connection.';
       toast.error(msg);
     } finally {
       setIsLoading(false);
