@@ -52,9 +52,7 @@ export default function Login() {
       toast.success('Welcome to TradeTrack Pro Demo!');
       navigate('/');
     } catch {
-      // Direct demo fallback login
-      localStorage.setItem('accessToken', 'demo-access-token-2026');
-      window.location.href = '/';
+      toast.error('Demo account not available. Please register a new account.');
     } finally {
       setIsLoading(false);
     }

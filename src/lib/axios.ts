@@ -4,8 +4,8 @@ import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
 /**
  * Pre-configured Axios instance for all API calls.
  *
- * - Base URL defaults to `/api` (proxied by Vite in dev, or set via env in prod).
- * - Automatically attaches JWT access token from localStorage.
+ * - Base URL defaults to `/api` (proxied by Vite in dev, or set via VITE_API_URL in prod).
+ * - Automatically attaches JWT access token from localStorage or sessionStorage.
  * - Handles 401 responses with automatic refresh token rotation & request retries.
  */
 const api = axios.create({
@@ -35,10 +35,20 @@ const processQueue = (error: any, token: string | null = null) => {
   failedQueue = [];
 };
 
+/** Helper to get the stored access token from either storage */
+const getAccessToken = (): string | null => {
+  return localStorage.getItem('accessToken') || sessionStorage.getItem('accessToken');
+};
+
+/** Helper to get the stored refresh token from either storage */
+const getRefreshToken = (): string | null => {
+  return localStorage.getItem('refreshToken') || sessionStorage.getItem('refreshToken');
+};
+
 // ── Request Interceptor: attach Bearer access token ──
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    const token = localStorage.getItem('accessToken');
+    const token = getAccessToken();
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -75,7 +85,20 @@ api.interceptors.response.use(
       originalRequest._retry = true;
       isRefreshing = true;
 
-      const refreshToken = localStorage.getItem('refreshToken');
+      const refreshToken = getRefreshToken();
+
+      if (!refreshToken) {
+        isRefreshing = false;
+        // No refresh token available — clear and redirect
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+        sessionStorage.removeItem('accessToken');
+        sessionStorage.removeItem('refreshToken');
+        if (!window.location.pathname.startsWith('/auth')) {
+          window.location.href = '/auth/login';
+        }
+        return Promise.reject(error);
+      }
 
       try {
         const res = await axios.post<{ status: string; data: { token: string } }>(
@@ -85,7 +108,13 @@ api.interceptors.response.use(
         );
 
         const newAccessToken = res.data.data.token;
-        localStorage.setItem('accessToken', newAccessToken);
+
+        // Store in whichever storage had the old token
+        if (localStorage.getItem('accessToken')) {
+          localStorage.setItem('accessToken', newAccessToken);
+        } else {
+          sessionStorage.setItem('accessToken', newAccessToken);
+        }
 
         if (originalRequest.headers) {
           originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
@@ -97,6 +126,8 @@ api.interceptors.response.use(
         processQueue(refreshError, null);
         localStorage.removeItem('accessToken');
         localStorage.removeItem('refreshToken');
+        sessionStorage.removeItem('accessToken');
+        sessionStorage.removeItem('refreshToken');
         if (!window.location.pathname.startsWith('/auth')) {
           window.location.href = '/auth/login';
         }

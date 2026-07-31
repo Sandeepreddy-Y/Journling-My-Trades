@@ -42,31 +42,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading: false,
       });
     } catch {
-      // Fallback demo user if API is offline or using demo token
-      if (token) {
-        setState({
-          user: {
-            id: 'user-demo',
-            email: 'trader@example.com',
-            displayName: 'Master Trader',
-            avatarUrl: null,
-            timezone: 'UTC',
-            preferredCurrency: 'USD',
-            isVerified: true,
-            createdAt: new Date().toISOString(),
-          },
-          accessToken: token,
-          isAuthenticated: true,
-          isLoading: false,
-        });
-      } else {
-        setState({
-          user: null,
-          accessToken: null,
-          isAuthenticated: false,
-          isLoading: false,
-        });
-      }
+      // Token is invalid or expired — clear auth state and redirect to login
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('refreshToken');
+      sessionStorage.removeItem('accessToken');
+      sessionStorage.removeItem('refreshToken');
+      setState({
+        user: null,
+        accessToken: null,
+        isAuthenticated: false,
+        isLoading: false,
+      });
     }
   }, []);
 
@@ -127,8 +113,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.getItem('refreshToken') || sessionStorage.getItem('refreshToken');
     api.post('/auth/logout', { refreshToken }).catch(() => {});
 
-    localStorage.clear();
-    sessionStorage.clear();
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    sessionStorage.removeItem('accessToken');
+    sessionStorage.removeItem('refreshToken');
 
     setState({
       user: null,

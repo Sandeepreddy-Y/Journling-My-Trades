@@ -15,7 +15,7 @@ const setRefreshTokenCookie = (res, refreshToken, rememberMe = false) => {
   res.cookie('refreshToken', refreshToken, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge,
   });
 };
@@ -28,6 +28,7 @@ const setRefreshTokenCookie = (res, refreshToken, rememberMe = false) => {
 const register = async (req, res) => {
   try {
     const { fullName, email, password } = req.body;
+    console.log('[Auth] Register attempt:', { email, fullName: fullName?.substring(0, 20) });
 
     if (!fullName || !fullName.trim()) {
       return res.status(400).json({
@@ -55,13 +56,14 @@ const register = async (req, res) => {
     // Check if email already registered
     let existingUser = null;
     if (pool) {
-      const result = await query('SELECT * FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
+      const result = await query('SELECT id FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
       existingUser = result.rows[0];
     } else {
       existingUser = memoryDb.users.find((u) => u.email.toLowerCase() === normalizedEmail);
     }
 
     if (existingUser) {
+      console.log('[Auth] Register failed — duplicate email:', normalizedEmail);
       return res.status(400).json({
         status: 'error',
         message: 'An account with this email address already exists. Please sign in.',
@@ -69,7 +71,7 @@ const register = async (req, res) => {
     }
 
     // Hash password with bcrypt
-    const salt = await bcrypt.genSalt(10);
+    const salt = await bcrypt.genSalt(12);
     const passwordHash = await bcrypt.hash(password, salt);
 
     // Store user
@@ -82,6 +84,7 @@ const register = async (req, res) => {
         [normalizedEmail, passwordHash, fullName.trim()]
       );
       newUser = insertResult.rows[0];
+      console.log('[Auth] ✅ User registered in PostgreSQL:', newUser.id);
     } else {
       newUser = {
         id: `user-${Date.now()}`,
@@ -94,19 +97,25 @@ const register = async (req, res) => {
         created_at: new Date().toISOString(),
       };
       memoryDb.users.push(newUser);
+      console.log('[Auth] ✅ User registered in memory:', newUser.id);
     }
 
     // Issue JWT Access & Refresh Tokens
     const accessToken = generateAccessToken(newUser);
     const refreshToken = generateRefreshToken(newUser);
 
-    // Save refresh session
+    // Save refresh session (use TEXT column, not VARCHAR for long JWTs)
     if (pool) {
-      await query(
-        `INSERT INTO sessions (user_id, token_hash, expires_at)
-         VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
-        [newUser.id, refreshToken]
-      );
+      try {
+        await query(
+          `INSERT INTO sessions (user_id, token_hash, expires_at)
+           VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
+          [newUser.id, refreshToken]
+        );
+      } catch (sessionErr) {
+        console.warn('[Auth] Session save warning:', sessionErr.message);
+        // Non-fatal — token still works for this request
+      }
     } else {
       if (!memoryDb.sessions) memoryDb.sessions = [];
       memoryDb.sessions.push({
@@ -126,7 +135,7 @@ const register = async (req, res) => {
           id: newUser.id,
           email: newUser.email,
           displayName: newUser.display_name || newUser.displayName,
-          avatarUrl: newUser.avatar_url || newUser.avatarUrl,
+          avatarUrl: newUser.avatar_url || newUser.avatarUrl || null,
           role: newUser.role,
         },
         token: accessToken,
@@ -134,10 +143,10 @@ const register = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('[Register Error]', error);
+    console.error('[Auth] ❌ Register Error:', error.message, error.stack);
     return res.status(500).json({
       status: 'error',
-      message: 'Server error during registration.',
+      message: 'Server error during registration. Please try again.',
     });
   }
 };
@@ -150,6 +159,7 @@ const register = async (req, res) => {
 const login = async (req, res) => {
   try {
     const { email, password, rememberMe = false } = req.body;
+    console.log('[Auth] Login attempt:', { email });
 
     if (!email || !password) {
       return res.status(400).json({
@@ -170,6 +180,7 @@ const login = async (req, res) => {
     }
 
     if (!user) {
+      console.log('[Auth] Login failed — user not found:', normalizedEmail);
       return res.status(401).json({
         status: 'error',
         message: 'Invalid email or password.',
@@ -179,11 +190,14 @@ const login = async (req, res) => {
     // Verify bcrypt password
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
+      console.log('[Auth] Login failed — wrong password for:', normalizedEmail);
       return res.status(401).json({
         status: 'error',
         message: 'Invalid email or password.',
       });
     }
+
+    console.log('[Auth] ✅ Login success:', user.id);
 
     // Issue JWT Access & Refresh Tokens
     const accessToken = generateAccessToken(user);
@@ -191,11 +205,15 @@ const login = async (req, res) => {
 
     // Save session in DB / memoryDb
     if (pool) {
-      await query(
-        `INSERT INTO sessions (user_id, token_hash, expires_at)
-         VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
-        [user.id, refreshToken]
-      );
+      try {
+        await query(
+          `INSERT INTO sessions (user_id, token_hash, expires_at)
+           VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
+          [user.id, refreshToken]
+        );
+      } catch (sessionErr) {
+        console.warn('[Auth] Session save warning:', sessionErr.message);
+      }
     } else {
       if (!memoryDb.sessions) memoryDb.sessions = [];
       memoryDb.sessions.push({
@@ -215,7 +233,7 @@ const login = async (req, res) => {
           id: user.id,
           email: user.email,
           displayName: user.display_name || user.displayName,
-          avatarUrl: user.avatar_url || user.avatarUrl,
+          avatarUrl: user.avatar_url || user.avatarUrl || null,
           role: user.role,
         },
         token: accessToken,
@@ -223,7 +241,7 @@ const login = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('[Login Error]', error);
+    console.error('[Auth] ❌ Login Error:', error.message, error.stack);
     return res.status(500).json({
       status: 'error',
       message: 'Server error during authentication.',
@@ -268,6 +286,7 @@ const refresh = async (req, res) => {
 
     // Generate new Access Token
     const newAccessToken = generateAccessToken(user);
+    console.log('[Auth] ✅ Token refreshed for user:', user.id);
 
     return res.status(200).json({
       status: 'success',
@@ -276,6 +295,7 @@ const refresh = async (req, res) => {
       },
     });
   } catch (error) {
+    console.log('[Auth] Refresh token invalid or expired');
     return res.status(401).json({
       status: 'error',
       message: 'Invalid or expired refresh token.',
@@ -294,7 +314,7 @@ const logout = async (req, res) => {
 
     if (refreshToken) {
       if (pool) {
-        await query('DELETE FROM sessions WHERE token_hash = $1', [refreshToken]);
+        await query('DELETE FROM sessions WHERE token_hash = $1', [refreshToken]).catch(() => {});
       } else if (memoryDb.sessions) {
         memoryDb.sessions = memoryDb.sessions.filter((s) => s.token_hash !== refreshToken);
       }
@@ -348,12 +368,13 @@ const getMe = async (req, res) => {
           id: user.id,
           email: user.email,
           displayName: user.display_name || user.displayName,
-          avatarUrl: user.avatar_url || user.avatarUrl,
+          avatarUrl: user.avatar_url || user.avatarUrl || null,
           role: user.role,
         },
       },
     });
   } catch (error) {
+    console.error('[Auth] getMe error:', error.message);
     return res.status(500).json({
       status: 'error',
       message: 'Error fetching user profile.',
