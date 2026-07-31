@@ -1,5 +1,9 @@
 const express = require('express');
+const multer = require('multer');
 const router = express.Router();
+
+const upload = multer({ storage: multer.memoryStorage() });
+
 const {
   createTrade,
   getTrades,
@@ -14,7 +18,7 @@ const { protect } = require('../middleware/authMiddleware');
 // All Trade Routes are JWT Protected
 router.use(protect);
 
-router.post('/import', importTrades);
+router.post('/import', upload.single('file'), importTrades);
 
 router.route('/')
   .post(createTrade)

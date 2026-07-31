@@ -199,8 +199,10 @@ export default function AddTrade() {
         await api.post('/trades', payload);
         toast.success('Trade execution logged successfully!');
       }
+      window.dispatchEvent(new CustomEvent('trades-updated'));
       navigate('/trades');
     } catch {
+      window.dispatchEvent(new CustomEvent('trades-updated'));
       toast.success(isEditMode ? 'Trade execution updated!' : 'Trade execution logged!');
       navigate('/trades');
     } finally {

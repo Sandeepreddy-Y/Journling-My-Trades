@@ -25,15 +25,26 @@ export function useTrades() {
 
   useEffect(() => {
     fetchTrades();
+
+    const handleUpdate = () => {
+      fetchTrades();
+    };
+
+    window.addEventListener('trades-updated', handleUpdate);
+    return () => {
+      window.removeEventListener('trades-updated', handleUpdate);
+    };
   }, [fetchTrades]);
 
   const deleteTrade = async (id: string) => {
     try {
       await api.delete(`/trades/${id}`);
       setTrades((prev) => prev.filter((t) => t.id !== id));
+      window.dispatchEvent(new CustomEvent('trades-updated'));
       toast.success('Trade deleted successfully');
     } catch {
       setTrades((prev) => prev.filter((t) => t.id !== id));
+      window.dispatchEvent(new CustomEvent('trades-updated'));
       toast.success('Trade deleted successfully');
     }
   };

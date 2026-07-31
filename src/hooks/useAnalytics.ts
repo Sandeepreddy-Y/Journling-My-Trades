@@ -85,6 +85,15 @@ export function useAnalytics() {
 
   useEffect(() => {
     fetchAnalytics();
+
+    const handleUpdate = () => {
+      fetchAnalytics();
+    };
+
+    window.addEventListener('trades-updated', handleUpdate);
+    return () => {
+      window.removeEventListener('trades-updated', handleUpdate);
+    };
   }, [fetchAnalytics]);
 
   return {
