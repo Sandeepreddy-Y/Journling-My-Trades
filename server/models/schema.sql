@@ -1,32 +1,20 @@
 -- ====================================================================
 -- TradeTrack Pro — Complete PostgreSQL Database Schema
 -- Production-grade schema with Primary Keys, Foreign Keys, Indexes,
--- Check Constraints, Unique Constraints, and Triggers.
+-- Check Constraints, Unique Constraints.
 -- ====================================================================
 
--- ── Extensions ──
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-
 -- ── Drop Existing Tables (Cascade for clean setup) ──
+DROP TABLE IF EXISTS trade_sync_history CASCADE;
+DROP TABLE IF EXISTS sync_logs CASCADE;
+DROP TABLE IF EXISTS sync_sessions CASCADE;
+DROP TABLE IF EXISTS broker_accounts CASCADE;
 DROP TABLE IF EXISTS trade_screenshots CASCADE;
 DROP TABLE IF EXISTS trades CASCADE;
 DROP TABLE IF EXISTS psychology_journal CASCADE;
 DROP TABLE IF EXISTS accounts CASCADE;
 DROP TABLE IF EXISTS sessions CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
-
--- ── Drop Trigger Function if exists ──
-DROP FUNCTION IF EXISTS update_updated_at_column CASCADE;
-
--- ── Helper Function: Automatic updated_at timestamp update ──
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = CURRENT_TIMESTAMP;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
 
 -- ====================================================================
 -- 1. USERS TABLE
@@ -44,13 +32,8 @@ CREATE TABLE users (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_users_email ON users(email);
-CREATE INDEX idx_users_created_at ON users(created_at);
-
-CREATE TRIGGER update_users_updated_at
-  BEFORE UPDATE ON users
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at);
 
 -- ====================================================================
 -- 2. ACCOUNTS TABLE
@@ -74,13 +57,8 @@ CREATE TABLE accounts (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_accounts_user_id ON accounts(user_id);
-CREATE INDEX idx_accounts_status ON accounts(status);
-
-CREATE TRIGGER update_accounts_updated_at
-  BEFORE UPDATE ON accounts
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
+CREATE INDEX IF NOT EXISTS idx_accounts_user_id ON accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);
 
 -- ====================================================================
 -- 3. SESSIONS TABLE
@@ -96,9 +74,9 @@ CREATE TABLE sessions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_sessions_user_id ON sessions(user_id);
-CREATE INDEX idx_sessions_token_hash ON sessions(token_hash);
-CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 
 -- ====================================================================
 -- 4. TRADES TABLE
@@ -125,7 +103,7 @@ CREATE TABLE trades (
   risk_reward NUMERIC(6, 2),
   before_screenshot TEXT,
   after_screenshot TEXT,
-  entry_time TIMESTAMPTZ NOT NULL,
+  entry_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   exit_time TIMESTAMPTZ,
   fees NUMERIC(12, 2) NOT NULL DEFAULT 0.00 CHECK (fees >= 0),
   swap NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
@@ -143,20 +121,14 @@ CREATE TABLE trades (
   CONSTRAINT check_exit_after_entry CHECK (exit_time IS NULL OR exit_time >= entry_time)
 );
 
--- B-tree indexes for fast dashboard, filtering, and chart queries
-CREATE INDEX idx_trades_user_id ON trades(user_id);
-CREATE INDEX idx_trades_account_id ON trades(account_id);
-CREATE INDEX idx_trades_symbol ON trades(symbol);
-CREATE INDEX idx_trades_entry_time ON trades(entry_time DESC);
-CREATE INDEX idx_trades_outcome ON trades(outcome);
-CREATE INDEX idx_trades_asset_class ON trades(asset_class);
-CREATE INDEX idx_trades_session ON trades(session);
-CREATE INDEX idx_trades_setup_tag ON trades(setup_tag);
-
-CREATE TRIGGER update_trades_updated_at
-  BEFORE UPDATE ON trades
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
+CREATE INDEX IF NOT EXISTS idx_trades_user_id ON trades(user_id);
+CREATE INDEX IF NOT EXISTS idx_trades_account_id ON trades(account_id);
+CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
+CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_outcome ON trades(outcome);
+CREATE INDEX IF NOT EXISTS idx_trades_asset_class ON trades(asset_class);
+CREATE INDEX IF NOT EXISTS idx_trades_session ON trades(session);
+CREATE INDEX IF NOT EXISTS idx_trades_setup_tag ON trades(setup_tag);
 
 -- ====================================================================
 -- 5. TRADE SCREENSHOTS TABLE
@@ -172,7 +144,7 @@ CREATE TABLE trade_screenshots (
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_trade_screenshots_trade_id ON trade_screenshots(trade_id);
+CREATE INDEX IF NOT EXISTS idx_trade_screenshots_trade_id ON trade_screenshots(trade_id);
 
 -- ====================================================================
 -- 6. PSYCHOLOGY JOURNAL TABLE
@@ -193,10 +165,77 @@ CREATE TABLE psychology_journal (
   CONSTRAINT unique_user_journal_date UNIQUE (user_id, journal_date)
 );
 
-CREATE INDEX idx_psychology_user_id ON psychology_journal(user_id);
-CREATE INDEX idx_psychology_date ON psychology_journal(journal_date DESC);
+CREATE INDEX IF NOT EXISTS idx_psychology_user_id ON psychology_journal(user_id);
+CREATE INDEX IF NOT EXISTS idx_psychology_date ON psychology_journal(journal_date DESC);
 
-CREATE TRIGGER update_psychology_journal_updated_at
-  BEFORE UPDATE ON psychology_journal
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
+-- ====================================================================
+-- 7. BROKER ACCOUNTS TABLE (MT5 REAL-TIME AUTO SYNC)
+-- Stores API keys, connected MT5 account details, server, & heartbeat
+-- ====================================================================
+CREATE TABLE broker_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  api_key VARCHAR(255) NOT NULL UNIQUE,
+  account_number VARCHAR(100),
+  broker VARCHAR(100),
+  server VARCHAR(100),
+  currency VARCHAR(10) DEFAULT 'USD',
+  terminal_id VARCHAR(100),
+  ea_version VARCHAR(20) DEFAULT '1.0.0',
+  is_connected BOOLEAN DEFAULT FALSE,
+  last_sync TIMESTAMPTZ,
+  last_heartbeat TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_broker_accounts_user_id ON broker_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_broker_accounts_api_key ON broker_accounts(api_key);
+
+-- ====================================================================
+-- 8. SYNC SESSIONS TABLE
+-- Tracks active EA connection sessions & terminal IP addresses
+-- ====================================================================
+CREATE TABLE sync_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  broker_account_id UUID NOT NULL REFERENCES broker_accounts(id) ON DELETE CASCADE,
+  session_token VARCHAR(255) NOT NULL UNIQUE,
+  ip_address VARCHAR(45),
+  status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'ended', 'expired')),
+  last_active TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_sessions_account_id ON sync_sessions(broker_account_id);
+
+-- ====================================================================
+-- 9. SYNC LOGS TABLE
+-- Audit log of EA events (Connection, Heartbeat, Trade Receipt, Duplicate Ignored)
+-- ====================================================================
+CREATE TABLE sync_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  broker_account_id UUID REFERENCES broker_accounts(id) ON DELETE SET NULL,
+  event_type VARCHAR(50) NOT NULL,
+  message TEXT NOT NULL,
+  details JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_sync_logs_account_id ON sync_logs(broker_account_id);
+CREATE INDEX IF NOT EXISTS idx_sync_logs_event_type ON sync_logs(event_type);
+
+-- ====================================================================
+-- 10. TRADE SYNC HISTORY TABLE (DUPLICATE PROTECTION)
+-- Uniqueness constraint ensuring ticket + account_number + broker is unique
+-- ====================================================================
+CREATE TABLE trade_sync_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  broker_account_id UUID NOT NULL REFERENCES broker_accounts(id) ON DELETE CASCADE,
+  ticket VARCHAR(100) NOT NULL,
+  symbol VARCHAR(30) NOT NULL,
+  status VARCHAR(20) DEFAULT 'synced',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT unique_ticket_account UNIQUE (broker_account_id, ticket)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_sync_history_ticket ON trade_sync_history(ticket);

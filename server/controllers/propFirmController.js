@@ -1,110 +1,150 @@
-const { query, memoryDb, pool } = require('../config/db');
+const { query } = require('../config/db');
 
-// Sample default prop firm accounts (FTMO, FundingPips, Goat Funded, Funding Traders)
-const DEFAULT_PROP_ACCOUNTS = [
-  {
-    id: 'pf-101',
-    userId: 'user-1',
-    firmName: 'FTMO',
-    accountName: 'FTMO $100k Challenge (Phase 1)',
-    accountSize: 100000,
-    currentBalance: 106450,
-    startingBalance: 100000,
-    phase: 'challenge', // 'challenge' | 'verification' | 'funded'
-    status: 'active', // 'active' | 'passed' | 'failed' | 'withdrawn'
-    maxDailyLossPercent: 5.0, // 5% = $5,000
-    currentDailyLoss: 420.00, // Today's drawdown
-    maxTotalDrawdownPercent: 10.0, // 10% = $10,000
-    currentTotalDrawdown: 850.00, // Peak to trough
-    profitTargetPercent: 10.0, // 10% = $10,000
-    currentProfit: 6450.00, // Current PnL
-    minTradingDays: 4,
-    tradingDaysCompleted: 8,
-    bestDayProfit: 2150.00, // For consistency rule (max 40% single day rule)
+/**
+ * Helper to compute prop firm account metrics from PostgreSQL trades
+ */
+const mapAccountToPropFirmData = async (acc, userId) => {
+  const initialBal = parseFloat(acc.initial_balance) || 100000;
+
+  // Fetch trades for this account or general user trades
+  const tradesResult = await query(
+    `SELECT pnl, entry_time::date as trade_date, exit_time
+     FROM trades
+     WHERE user_id = $1 AND (account_id = $2 OR account_name = $3 OR $2 IS NULL)
+     ORDER BY entry_time ASC`,
+    [userId, acc.id, acc.account_name]
+  );
+
+  let totalPnl = 0;
+  let todayLoss = 0;
+  let peakBalance = initialBal;
+  let maxDrawdownVal = 0;
+  let bestSingleDayProfit = 0;
+  const distinctDays = new Set();
+  const dailyPnlMap = {};
+
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  for (const t of tradesResult.rows) {
+    const pnl = parseFloat(t.pnl) || 0;
+    totalPnl += pnl;
+
+    const currentBal = initialBal + totalPnl;
+    if (currentBal > peakBalance) {
+      peakBalance = currentBal;
+    }
+    const drawdown = peakBalance - currentBal;
+    if (drawdown > maxDrawdownVal) {
+      maxDrawdownVal = drawdown;
+    }
+
+    if (t.trade_date) {
+      const dateKey = String(t.trade_date).split('T')[0];
+      distinctDays.add(dateKey);
+      dailyPnlMap[dateKey] = (dailyPnlMap[dateKey] || 0) + pnl;
+
+      if (dateKey === todayStr && pnl < 0) {
+        todayLoss += Math.abs(pnl);
+      }
+    }
+  }
+
+  for (const dateKey in dailyPnlMap) {
+    if (dailyPnlMap[dateKey] > bestSingleDayProfit) {
+      bestSingleDayProfit = dailyPnlMap[dateKey];
+    }
+  }
+
+  const currentBalance = initialBal + totalPnl;
+  const profitTargetPercent = parseFloat(acc.profit_target) || 10.0;
+  const maxDailyLossPercent = parseFloat(acc.max_daily_drawdown_percent) || 5.0;
+  const maxTotalDrawdownPercent = parseFloat(acc.max_total_drawdown_percent) || 10.0;
+
+  return {
+    id: acc.id,
+    firmName: acc.prop_firm_name || acc.broker || 'FTMO',
+    accountName: acc.account_name,
+    accountSize: initialBal,
+    currentBalance: parseFloat(currentBalance.toFixed(2)),
+    startingBalance: initialBal,
+    phase: acc.account_type === 'challenge' ? 'challenge' : 'funded',
+    status: acc.status || 'active',
+    maxDailyLossPercent,
+    currentDailyLoss: parseFloat(todayLoss.toFixed(2)),
+    maxTotalDrawdownPercent,
+    currentTotalDrawdown: parseFloat(maxDrawdownVal.toFixed(2)),
+    profitTargetPercent,
+    currentProfit: parseFloat(totalPnl.toFixed(2)),
+    minTradingDays: 5,
+    tradingDaysCompleted: distinctDays.size,
+    bestDayProfit: parseFloat(bestSingleDayProfit.toFixed(2)),
     payoutCountdownDays: 14,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'pf-102',
-    userId: 'user-1',
-    firmName: 'FundingPips',
-    accountName: 'FundingPips $50k Evaluation (Phase 2)',
-    accountSize: 50000,
-    currentBalance: 52800,
-    startingBalance: 50000,
-    phase: 'verification',
-    status: 'active',
-    maxDailyLossPercent: 4.0, // 4% = $2,000
-    currentDailyLoss: 150.00,
-    maxTotalDrawdownPercent: 8.0, // 8% = $4,000
-    currentTotalDrawdown: 350.00,
-    profitTargetPercent: 5.0, // 5% = $2,500
-    currentProfit: 2800.00,
-    minTradingDays: 5,
-    tradingDaysCompleted: 5,
-    bestDayProfit: 850.00,
-    payoutCountdownDays: 7,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'pf-103',
-    userId: 'user-1',
-    firmName: 'Goat Funded',
-    accountName: 'Goat Funded $100k Live Account',
-    accountSize: 100000,
-    currentBalance: 108250,
-    startingBalance: 100000,
-    phase: 'funded',
-    status: 'active',
-    maxDailyLossPercent: 5.0,
-    currentDailyLoss: 0.00,
-    maxTotalDrawdownPercent: 10.0,
-    currentTotalDrawdown: 600.00,
-    profitTargetPercent: 0.0, // Funded account (no target)
-    currentProfit: 8250.00,
-    minTradingDays: 0,
-    tradingDaysCompleted: 18,
-    bestDayProfit: 2400.00,
-    payoutCountdownDays: 3,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'pf-104',
-    userId: 'user-1',
-    firmName: 'Funding Traders',
-    accountName: 'Funding Traders $200k Executive Challenge',
-    accountSize: 200000,
-    currentBalance: 211400,
-    startingBalance: 200000,
-    phase: 'challenge',
-    status: 'active',
-    maxDailyLossPercent: 5.0,
-    currentDailyLoss: 620.00,
-    maxTotalDrawdownPercent: 10.0,
-    currentTotalDrawdown: 1100.00,
-    profitTargetPercent: 8.0, // 8% = $16,000
-    currentProfit: 11400.00,
-    minTradingDays: 5,
-    tradingDaysCompleted: 9,
-    bestDayProfit: 3800.00,
-    payoutCountdownDays: 18,
-    createdAt: new Date().toISOString(),
-  },
-];
+    createdAt: acc.created_at,
+  };
+};
+
+/**
+ * Default sample prop firm accounts for initial user onboarding
+ */
+const seedDefaultPropAccounts = async (userId) => {
+  const defaults = [
+    {
+      firmName: 'FTMO',
+      accountName: 'FTMO $100k Challenge',
+      accountSize: 100000,
+      maxDailyLossPercent: 5.0,
+      maxTotalDrawdownPercent: 10.0,
+      profitTargetPercent: 10.0,
+    },
+    {
+      firmName: 'FundingPips',
+      accountName: 'FundingPips $50k Evaluation',
+      accountSize: 50000,
+      maxDailyLossPercent: 4.0,
+      maxTotalDrawdownPercent: 8.0,
+      profitTargetPercent: 5.0,
+    },
+  ];
+
+  const createdAccounts = [];
+  for (const d of defaults) {
+    const res = await query(
+      `INSERT INTO accounts
+      (user_id, account_name, broker, prop_firm_name, account_type, initial_balance, current_balance, max_daily_drawdown_percent, max_total_drawdown_percent, profit_target, status)
+      VALUES ($1, $2, $3, $4, 'challenge', $5, $5, $6, $7, $8, 'active')
+      RETURNING *`,
+      [userId, d.accountName, d.firmName, d.firmName, d.accountSize, d.maxDailyLossPercent, d.maxTotalDrawdownPercent, d.profitTargetPercent]
+    );
+    const mapped = await mapAccountToPropFirmData(res.rows[0], userId);
+    createdAccounts.push(mapped);
+  }
+  return createdAccounts;
+};
 
 /**
  * @route   GET /api/prop-firm
- * @desc    Get all prop firm accounts for user
+ * @desc    Fetch user's prop firm accounts from PostgreSQL
  * @access  Private
  */
 const getPropFirmAccounts = async (req, res) => {
   try {
-    let accounts = DEFAULT_PROP_ACCOUNTS;
+    const userId = req.user.id;
+    console.log(`[PropFirm GET] Fetching prop firm accounts for user: ${userId}`);
 
-    if (!memoryDb.propFirmAccounts) {
-      memoryDb.propFirmAccounts = DEFAULT_PROP_ACCOUNTS;
+    const result = await query(
+      `SELECT * FROM accounts WHERE user_id = $1 AND account_type IN ('prop_firm', 'challenge') ORDER BY created_at DESC`,
+      [userId]
+    );
+
+    let accounts = [];
+    if (result.rows.length === 0) {
+      console.log(`[PropFirm GET] Seeding initial prop firm accounts for user ${userId}...`);
+      accounts = await seedDefaultPropAccounts(userId);
     } else {
-      accounts = memoryDb.propFirmAccounts;
+      for (const row of result.rows) {
+        const mapped = await mapAccountToPropFirmData(row, userId);
+        accounts.push(mapped);
+      }
     }
 
     return res.status(200).json({
@@ -113,22 +153,26 @@ const getPropFirmAccounts = async (req, res) => {
       data: { accounts },
     });
   } catch (error) {
-    console.error('[Get Prop Firm Error]', error);
+    console.error('[Get Prop Firm Error]:', error.message, error.stack);
     return res.status(500).json({
       status: 'error',
-      message: 'Failed to fetch prop firm accounts.',
+      message: `Failed to fetch prop firm accounts: ${error.message}`,
     });
   }
 };
 
 /**
  * @route   POST /api/prop-firm
- * @desc    Add a new prop firm account
+ * @desc    Create a new prop firm account configuration in PostgreSQL
  * @access  Private
  */
 const createPropFirmAccount = async (req, res) => {
   try {
-    const userId = req.user ? req.user.id : 'user-1';
+    const userId = req.user.id;
+    console.log('[PropFirm POST] Request URL: /api/prop-firm');
+    console.log('[PropFirm POST] Request payload:', req.body);
+    console.log('[PropFirm POST] User ID:', userId);
+
     const {
       firmName = 'FTMO',
       accountName,
@@ -137,53 +181,84 @@ const createPropFirmAccount = async (req, res) => {
       maxDailyLossPercent = 5.0,
       maxTotalDrawdownPercent = 10.0,
       profitTargetPercent = 10.0,
-      minTradingDays = 5,
+      apiCredentials,
     } = req.body;
 
-    if (!accountName) {
+    // ── Input Validation ──
+    if (!accountName || typeof accountName !== 'string' || !accountName.trim()) {
+      console.log('[PropFirm POST Validation Error]: Account name missing');
       return res.status(400).json({
         status: 'error',
-        message: 'Account name is required.',
+        message: 'Account label/name is required (e.g., FTMO $100k Challenge).',
       });
     }
 
-    const newAccount = {
-      id: `pf-${Date.now()}`,
-      userId,
-      firmName,
-      accountName,
-      accountSize: parseFloat(accountSize),
-      currentBalance: parseFloat(accountSize),
-      startingBalance: parseFloat(accountSize),
-      phase,
-      status: 'active',
-      maxDailyLossPercent: parseFloat(maxDailyLossPercent),
-      currentDailyLoss: 0,
-      maxTotalDrawdownPercent: parseFloat(maxTotalDrawdownPercent),
-      currentTotalDrawdown: 0,
-      profitTargetPercent: parseFloat(profitTargetPercent),
-      currentProfit: 0,
-      minTradingDays: parseInt(minTradingDays) || 5,
-      tradingDaysCompleted: 0,
-      bestDayProfit: 0,
-      payoutCountdownDays: 14,
-      createdAt: new Date().toISOString(),
-    };
-
-    if (!memoryDb.propFirmAccounts) {
-      memoryDb.propFirmAccounts = [...DEFAULT_PROP_ACCOUNTS];
+    const parsedSize = parseFloat(accountSize);
+    if (isNaN(parsedSize) || parsedSize <= 0) {
+      console.log('[PropFirm POST Validation Error]: Invalid account size:', accountSize);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Account size must be a valid positive number (e.g. 100000).',
+      });
     }
-    memoryDb.propFirmAccounts.unshift(newAccount);
+
+    const parsedDailyLoss = parseFloat(maxDailyLossPercent);
+    if (isNaN(parsedDailyLoss) || parsedDailyLoss < 0 || parsedDailyLoss > 100) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Max daily loss percent must be a valid number between 0% and 100%.',
+      });
+    }
+
+    const parsedTotalDrawdown = parseFloat(maxTotalDrawdownPercent);
+    if (isNaN(parsedTotalDrawdown) || parsedTotalDrawdown < 0 || parsedTotalDrawdown > 100) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Max total drawdown percent must be a valid number between 0% and 100%.',
+      });
+    }
+
+    // ── Direct API Integration Check (Requirement #3 & #6) ──
+    if (apiCredentials && (apiCredentials.login || apiCredentials.password)) {
+      console.log(`[PropFirm Direct API Check] User attempted direct login to ${firmName}.`);
+      return res.status(400).json({
+        status: 'error',
+        message: `Direct login connection to ${firmName} is unavailable because ${firmName} does not provide an official public API for third-party credentials. Please use the MT5 Auto Sync EA in Settings to sync your MT5 trades automatically.`,
+      });
+    }
+
+    // ── Insert Account Config into PostgreSQL ──
+    const insertResult = await query(
+      `INSERT INTO accounts
+      (user_id, account_name, broker, prop_firm_name, account_type, initial_balance, current_balance, max_daily_drawdown_percent, max_total_drawdown_percent, profit_target, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8, $9, 'active')
+      RETURNING *`,
+      [
+        userId,
+        accountName.trim(),
+        firmName.trim(),
+        firmName.trim(),
+        phase === 'challenge' ? 'challenge' : 'prop_firm',
+        parsedSize,
+        parsedDailyLoss,
+        parsedTotalDrawdown,
+        parseFloat(profitTargetPercent) || 10.0,
+      ]
+    );
+
+    const createdAccount = await mapAccountToPropFirmData(insertResult.rows[0], userId);
+    console.log('[PropFirm POST] Account created successfully:', createdAccount.id);
 
     return res.status(201).json({
       status: 'success',
-      message: 'Prop firm account added successfully.',
-      data: { account: newAccount },
+      message: 'Prop firm challenge account configured successfully.',
+      data: { account: createdAccount },
     });
   } catch (error) {
+    console.error('[Create Prop Firm Error]:', error.message, error.stack);
     return res.status(500).json({
       status: 'error',
-      message: 'Error creating prop firm account.',
+      message: `Failed to connect prop firm account: ${error.message}`,
     });
   }
 };

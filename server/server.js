@@ -1,9 +1,26 @@
+const path = require('path');
+const fs = require('fs');
+const dotenv = require('dotenv');
+const http = require('http');
+
+// Load .env relative to server directory
+const serverEnvPath = path.resolve(__dirname, '.env');
+const rootEnvPath = path.resolve(__dirname, '../.env');
+
+if (fs.existsSync(serverEnvPath)) {
+  dotenv.config({ path: serverEnvPath });
+} else if (fs.existsSync(rootEnvPath)) {
+  dotenv.config({ path: rootEnvPath });
+} else {
+  dotenv.config();
+}
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
-require('dotenv').config();
+const { Server } = require('socket.io');
 
 const authRoutes = require('./routes/authRoutes');
 const tradeRoutes = require('./routes/tradeRoutes');
@@ -11,11 +28,30 @@ const analyticsRoutes = require('./routes/analyticsRoutes');
 const propFirmRoutes = require('./routes/propFirmRoutes');
 const uploadRoutes = require('./routes/uploadRoutes');
 const strategyRoutes = require('./routes/strategyRoutes');
+const syncRoutes = require('./routes/syncRoutes');
 const rateLimiter = require('./middleware/rateLimiter');
-const { pool } = require('./config/db');
+const { query, initDb } = require('./config/db');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Create HTTP Server & Attach Socket.IO
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    credentials: true,
+  },
+});
+
+app.set('io', io);
+
+io.on('connection', (socket) => {
+  console.log('[Socket.IO] Client connected:', socket.id);
+  socket.on('disconnect', () => {
+    console.log('[Socket.IO] Client disconnected:', socket.id);
+  });
+});
 
 // ── Security & Logging Middleware ──
 app.use(helmet());
@@ -31,16 +67,14 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, curl, server-to-server)
       if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-      // Allow any Vercel preview/production deployments
       if (origin.endsWith('.vercel.app')) {
         return callback(null, true);
       }
-      return callback(null, true); // permissive for now
+      return callback(null, true);
     },
     credentials: true,
   })
@@ -56,8 +90,8 @@ app.get('/', (req, res) => {
     status: 'success',
     name: 'TradeTrack Pro API Server',
     version: '1.0.0',
-    database: pool ? 'PostgreSQL Connected' : 'In-Memory (No DATABASE_URL)',
-    documentation: '/api',
+    database: 'PostgreSQL Connected',
+    realtime: 'Socket.IO Active',
     health: '/health',
     timestamp: new Date().toISOString(),
   });
@@ -68,7 +102,8 @@ app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'success',
     message: 'TradeTrack Pro API Server is operational',
-    database: pool ? 'connected' : 'memory',
+    database: 'postgresql',
+    realtime: 'active',
     timestamp: new Date().toISOString(),
   });
 });
@@ -85,6 +120,7 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/prop-firm', propFirmRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/strategies', strategyRoutes);
+app.use('/api/sync', syncRoutes);
 
 // ── Root API Info ──
 app.get('/api', (req, res) => {
@@ -98,6 +134,7 @@ app.get('/api', (req, res) => {
       propFirm: '/api/prop-firm',
       upload: '/api/upload',
       strategies: '/api/strategies',
+      sync: '/api/sync',
     },
   });
 });
@@ -121,94 +158,27 @@ app.use((err, req, res, next) => {
 
 // ── Auto-Initialize Database Tables ──
 const initializeDatabase = async () => {
-  if (!pool) {
-    console.log('[DB] No DATABASE_URL set — running with in-memory store.');
-    return;
-  }
-
   try {
-    // Create users table if not exists
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        email VARCHAR(255) NOT NULL UNIQUE,
-        password_hash VARCHAR(255) NOT NULL,
-        display_name VARCHAR(100) NOT NULL,
-        avatar_url TEXT,
-        role VARCHAR(20) NOT NULL DEFAULT 'trader',
-        theme_preference VARCHAR(10) DEFAULT 'dark',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-
-    // Create sessions table if not exists
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        token_hash TEXT NOT NULL,
-        expires_at TIMESTAMPTZ NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-
-    // Create trades table if not exists
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS trades (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        broker VARCHAR(100) DEFAULT 'MetaTrader 5',
-        account_name VARCHAR(100) DEFAULT 'Default Account',
-        symbol VARCHAR(30) NOT NULL,
-        asset_class VARCHAR(30) NOT NULL DEFAULT 'forex',
-        direction VARCHAR(10) NOT NULL,
-        entry_price NUMERIC(18, 8) NOT NULL,
-        exit_price NUMERIC(18, 8),
-        lot_size NUMERIC(12, 4),
-        stop_loss NUMERIC(18, 8),
-        take_profit NUMERIC(18, 8),
-        risk_amount NUMERIC(15, 2),
-        reward_amount NUMERIC(15, 2),
-        risk_percent NUMERIC(5, 2),
-        reward_percent NUMERIC(5, 2),
-        risk_reward NUMERIC(6, 2),
-        before_screenshot TEXT,
-        after_screenshot TEXT,
-        entry_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        exit_time TIMESTAMPTZ,
-        fees NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
-        swap NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
-        pnl NUMERIC(15, 2),
-        pnl_pips NUMERIC(12, 2),
-        outcome VARCHAR(20),
-        emotion VARCHAR(50),
-        rating INTEGER,
-        notes TEXT,
-        session VARCHAR(30),
-        setup_tag VARCHAR(100),
-        status VARCHAR(20) NOT NULL DEFAULT 'closed',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-
-    console.log('[DB] ✅ Database tables verified/created successfully.');
+    await initDb();
+    const schemaSql = fs.readFileSync(path.resolve(__dirname, './models/schema.sql'), 'utf8');
+    await query(schemaSql);
+    console.log('[DB] ✅ Database tables verified/created successfully in PostgreSQL.');
   } catch (error) {
-    console.error('[DB] ⚠️  Table initialization error:', error.message);
+    console.error('[DB] ⚠️ Table initialization error:', error.message);
   }
 };
 
 // ── Start Server ──
 if (process.env.NODE_ENV !== 'test') {
   initializeDatabase().then(() => {
-    app.listen(PORT, () => {
+    server.listen(PORT, () => {
       console.log(`
       🚀 TradeTrack Pro API Server running on port ${PORT}
       🔗 Root: http://localhost:${PORT}/
       🔑 Auth: http://localhost:${PORT}/api/auth
       📈 Trades: http://localhost:${PORT}/api/trades
-      🗄️  Database: ${pool ? 'PostgreSQL' : 'In-Memory'}
+      ⚡ Sync: http://localhost:${PORT}/api/sync
+      🗄️  Database: PostgreSQL
       `);
     });
   });

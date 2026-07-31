@@ -1,5 +1,5 @@
 const bcrypt = require('bcryptjs');
-const { query, memoryDb, pool } = require('../config/db');
+const { query } = require('../config/db');
 const {
   generateAccessToken,
   generateRefreshToken,
@@ -28,9 +28,11 @@ const setRefreshTokenCookie = (res, refreshToken, rememberMe = false) => {
 const register = async (req, res) => {
   try {
     const { fullName, email, password } = req.body;
-    console.log('[Auth] Register attempt:', { email, fullName: fullName?.substring(0, 20) });
+    console.log('[Auth:Register] Incoming registration request for:', email);
 
+    // ── Input Validation ──
     if (!fullName || !fullName.trim()) {
+      console.log('[Auth:Register] ❌ Validation Error: Missing fullName');
       return res.status(400).json({
         status: 'error',
         message: 'Full Name is required.',
@@ -38,6 +40,7 @@ const register = async (req, res) => {
     }
 
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      console.log('[Auth:Register] ❌ Validation Error: Invalid email format');
       return res.status(400).json({
         status: 'error',
         message: 'Please provide a valid email address.',
@@ -45,6 +48,7 @@ const register = async (req, res) => {
     }
 
     if (!password || password.length < 8) {
+      console.log('[Auth:Register] ❌ Validation Error: Password must be at least 8 characters');
       return res.status(400).json({
         status: 'error',
         message: 'Password must be at least 8 characters long.',
@@ -53,80 +57,93 @@ const register = async (req, res) => {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Check if email already registered
-    let existingUser = null;
-    if (pool) {
-      const result = await query('SELECT id FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
-      existingUser = result.rows[0];
-    } else {
-      existingUser = memoryDb.users.find((u) => u.email.toLowerCase() === normalizedEmail);
+    // ── Check Database Connection & Duplicate Email ──
+    console.log('[Auth:Register] Querying database for duplicate email...');
+    let existingUserResult;
+    try {
+      existingUserResult = await query(
+        'SELECT id FROM users WHERE LOWER(email) = $1',
+        [normalizedEmail]
+      );
+    } catch (sqlErr) {
+      console.error('[Auth:Register Database Error] User lookup failed:', sqlErr.message, sqlErr.stack);
+      return res.status(500).json({
+        status: 'error',
+        message: `Database connection error during duplicate check: ${sqlErr.message}`,
+      });
     }
 
-    if (existingUser) {
-      console.log('[Auth] Register failed — duplicate email:', normalizedEmail);
+    if (existingUserResult.rows.length > 0) {
+      console.log('[Auth:Register] ❌ Duplicate email found:', normalizedEmail);
       return res.status(400).json({
         status: 'error',
         message: 'An account with this email address already exists. Please sign in.',
       });
     }
 
-    // Hash password with bcrypt
-    const salt = await bcrypt.genSalt(12);
-    const passwordHash = await bcrypt.hash(password, salt);
+    // ── Bcrypt Password Hashing ──
+    let passwordHash;
+    try {
+      const salt = await bcrypt.genSalt(12);
+      passwordHash = await bcrypt.hash(password, salt);
+      console.log('[Auth:Register] Password hashed successfully');
+    } catch (bcryptErr) {
+      console.error('[Auth:Register Bcrypt Error]:', bcryptErr.message, bcryptErr.stack);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Password encryption failed.',
+      });
+    }
 
-    // Store user
-    let newUser = null;
-    if (pool) {
-      const insertResult = await query(
+    // ── Insert User into PostgreSQL ──
+    let insertResult;
+    try {
+      insertResult = await query(
         `INSERT INTO users (email, password_hash, display_name)
          VALUES ($1, $2, $3)
          RETURNING id, email, display_name, avatar_url, role, theme_preference, created_at`,
         [normalizedEmail, passwordHash, fullName.trim()]
       );
-      newUser = insertResult.rows[0];
-      console.log('[Auth] ✅ User registered in PostgreSQL:', newUser.id);
-    } else {
-      newUser = {
-        id: `user-${Date.now()}`,
-        email: normalizedEmail,
-        password_hash: passwordHash,
-        display_name: fullName.trim(),
-        avatar_url: null,
-        role: 'trader',
-        theme_preference: 'dark',
-        created_at: new Date().toISOString(),
-      };
-      memoryDb.users.push(newUser);
-      console.log('[Auth] ✅ User registered in memory:', newUser.id);
+    } catch (sqlErr) {
+      console.error('[Auth:Register SQL Error] User insertion failed:', sqlErr.message, sqlErr.stack);
+      return res.status(500).json({
+        status: 'error',
+        message: `Database error inserting new user: ${sqlErr.message}`,
+      });
     }
 
-    // Issue JWT Access & Refresh Tokens
-    const accessToken = generateAccessToken(newUser);
-    const refreshToken = generateRefreshToken(newUser);
+    const newUser = insertResult.rows[0];
+    console.log('[Auth:Register] User insert successful:', newUser.id);
 
-    // Save refresh session (use TEXT column, not VARCHAR for long JWTs)
-    if (pool) {
-      try {
-        await query(
-          `INSERT INTO sessions (user_id, token_hash, expires_at)
-           VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
-          [newUser.id, refreshToken]
-        );
-      } catch (sessionErr) {
-        console.warn('[Auth] Session save warning:', sessionErr.message);
-        // Non-fatal — token still works for this request
-      }
-    } else {
-      if (!memoryDb.sessions) memoryDb.sessions = [];
-      memoryDb.sessions.push({
-        user_id: newUser.id,
-        token_hash: refreshToken,
-        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    // ── JWT Token Generation ──
+    let accessToken, refreshToken;
+    try {
+      accessToken = generateAccessToken(newUser);
+      refreshToken = generateRefreshToken(newUser);
+      console.log('[Auth:Register] JWT tokens generated successfully');
+    } catch (jwtErr) {
+      console.error('[Auth:Register JWT Error]:', jwtErr.message, jwtErr.stack);
+      return res.status(500).json({
+        status: 'error',
+        message: 'JWT token generation failed.',
       });
+    }
+
+    // ── Session Storage in PostgreSQL ──
+    try {
+      await query(
+        `INSERT INTO sessions (user_id, token_hash, expires_at)
+         VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
+        [newUser.id, refreshToken]
+      );
+      console.log('[Auth:Register] Session record created');
+    } catch (sessionErr) {
+      console.error('[Auth:Register SQL Error] Session creation warning:', sessionErr.message);
     }
 
     setRefreshTokenCookie(res, refreshToken, false);
 
+    console.log('[Auth:Register] 201 Created - Registration completed for:', newUser.email);
     return res.status(201).json({
       status: 'success',
       message: 'Account registered successfully.',
@@ -134,19 +151,21 @@ const register = async (req, res) => {
         user: {
           id: newUser.id,
           email: newUser.email,
-          displayName: newUser.display_name || newUser.displayName,
-          avatarUrl: newUser.avatar_url || newUser.avatarUrl || null,
+          displayName: newUser.display_name,
+          avatarUrl: newUser.avatar_url || null,
           role: newUser.role,
+          themePreference: newUser.theme_preference || 'dark',
+          createdAt: newUser.created_at,
         },
         token: accessToken,
         refreshToken,
       },
     });
   } catch (error) {
-    console.error('[Auth] ❌ Register Error:', error.message, error.stack);
+    console.error('[Auth:Register Fatal Error]:', error.message, error.stack);
     return res.status(500).json({
       status: 'error',
-      message: 'Server error during registration. Please try again.',
+      message: `Server error during registration: ${error.message}`,
     });
   }
 };
@@ -159,9 +178,10 @@ const register = async (req, res) => {
 const login = async (req, res) => {
   try {
     const { email, password, rememberMe = false } = req.body;
-    console.log('[Auth] Login attempt:', { email });
+    console.log('[Auth:Login] Processing login attempt for:', email);
 
     if (!email || !password) {
+      console.log('[Auth:Login] ❌ Validation Error: Missing credentials');
       return res.status(400).json({
         status: 'error',
         message: 'Please provide both email and password.',
@@ -170,61 +190,82 @@ const login = async (req, res) => {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Find User
-    let user = null;
-    if (pool) {
-      const result = await query('SELECT * FROM users WHERE LOWER(email) = $1', [normalizedEmail]);
-      user = result.rows[0];
-    } else {
-      user = memoryDb.users.find((u) => u.email.toLowerCase() === normalizedEmail);
-    }
-
-    if (!user) {
-      console.log('[Auth] Login failed — user not found:', normalizedEmail);
-      return res.status(401).json({
+    // ── Query User from PostgreSQL ──
+    let userResult;
+    try {
+      userResult = await query(
+        'SELECT id, email, password_hash, display_name, avatar_url, role, theme_preference, created_at FROM users WHERE LOWER(email) = $1',
+        [normalizedEmail]
+      );
+    } catch (sqlErr) {
+      console.error('[Auth:Login SQL Error] User lookup failed:', sqlErr.message, sqlErr.stack);
+      return res.status(500).json({
         status: 'error',
-        message: 'Invalid email or password.',
+        message: `Database connection error during login: ${sqlErr.message}`,
       });
     }
 
-    // Verify bcrypt password
-    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (userResult.rows.length === 0) {
+      console.log('[Auth:Login] ❌ User lookup: User not found for email:', normalizedEmail);
+      return res.status(401).json({
+        status: 'error',
+        message: 'User account not found with this email address.',
+      });
+    }
+
+    const user = userResult.rows[0];
+    console.log('[Auth:Login] User found:', user.id);
+
+    // ── Bcrypt Password Verification ──
+    let isMatch = false;
+    try {
+      isMatch = await bcrypt.compare(password, user.password_hash);
+    } catch (bcryptErr) {
+      console.error('[Auth:Login Bcrypt Error]:', bcryptErr.message, bcryptErr.stack);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Password comparison error.',
+      });
+    }
+
     if (!isMatch) {
-      console.log('[Auth] Login failed — wrong password for:', normalizedEmail);
+      console.log('[Auth:Login] ❌ Password mismatch for user:', user.id);
       return res.status(401).json({
         status: 'error',
-        message: 'Invalid email or password.',
+        message: 'Invalid password. Please check your password and try again.',
+      });
+    }
+    console.log('[Auth:Login] Password verified successfully');
+
+    // ── JWT Generation ──
+    let accessToken, refreshToken;
+    try {
+      accessToken = generateAccessToken(user);
+      refreshToken = generateRefreshToken(user);
+      console.log('[Auth:Login] JWT generated successfully');
+    } catch (jwtErr) {
+      console.error('[Auth:Login JWT Error]:', jwtErr.message, jwtErr.stack);
+      return res.status(500).json({
+        status: 'error',
+        message: 'JWT generation failed.',
       });
     }
 
-    console.log('[Auth] ✅ Login success:', user.id);
-
-    // Issue JWT Access & Refresh Tokens
-    const accessToken = generateAccessToken(user);
-    const refreshToken = generateRefreshToken(user);
-
-    // Save session in DB / memoryDb
-    if (pool) {
-      try {
-        await query(
-          `INSERT INTO sessions (user_id, token_hash, expires_at)
-           VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
-          [user.id, refreshToken]
-        );
-      } catch (sessionErr) {
-        console.warn('[Auth] Session save warning:', sessionErr.message);
-      }
-    } else {
-      if (!memoryDb.sessions) memoryDb.sessions = [];
-      memoryDb.sessions.push({
-        user_id: user.id,
-        token_hash: refreshToken,
-        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      });
+    // ── Session Storage in PostgreSQL ──
+    try {
+      await query(
+        `INSERT INTO sessions (user_id, token_hash, expires_at)
+         VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
+        [user.id, refreshToken]
+      );
+      console.log('[Auth:Login] Session record stored');
+    } catch (sessionErr) {
+      console.error('[Auth:Login SQL Error] Session store warning:', sessionErr.message);
     }
 
     setRefreshTokenCookie(res, refreshToken, rememberMe);
 
+    console.log('[Auth:Login] 200 OK - Login successful for:', user.email);
     return res.status(200).json({
       status: 'success',
       message: 'Logged in successfully.',
@@ -232,19 +273,21 @@ const login = async (req, res) => {
         user: {
           id: user.id,
           email: user.email,
-          displayName: user.display_name || user.displayName,
-          avatarUrl: user.avatar_url || user.avatarUrl || null,
+          displayName: user.display_name,
+          avatarUrl: user.avatar_url || null,
           role: user.role,
+          themePreference: user.theme_preference || 'dark',
+          createdAt: user.created_at,
         },
         token: accessToken,
         refreshToken,
       },
     });
   } catch (error) {
-    console.error('[Auth] ❌ Login Error:', error.message, error.stack);
+    console.error('[Auth:Login Fatal Error]:', error.message, error.stack);
     return res.status(500).json({
       status: 'error',
-      message: 'Server error during authentication.',
+      message: `Server error during authentication: ${error.message}`,
     });
   }
 };
@@ -266,27 +309,36 @@ const refresh = async (req, res) => {
     }
 
     // Verify Refresh Token
-    const decoded = verifyRefreshToken(refreshToken);
-
-    // Find User
-    let user = null;
-    if (pool) {
-      const result = await query('SELECT * FROM users WHERE id = $1', [decoded.id]);
-      user = result.rows[0];
-    } else {
-      user = memoryDb.users.find((u) => u.id === decoded.id);
+    let decoded;
+    try {
+      decoded = verifyRefreshToken(refreshToken);
+    } catch (jwtErr) {
+      console.error('[Auth:Refresh JWT Error]:', jwtErr.message);
+      return res.status(401).json({
+        status: 'error',
+        message: 'Invalid or expired refresh token.',
+      });
     }
 
-    if (!user) {
+    // Find User in PostgreSQL
+    let userResult;
+    try {
+      userResult = await query('SELECT id, email, display_name, role FROM users WHERE id = $1', [decoded.id]);
+    } catch (sqlErr) {
+      console.error('[Auth:Refresh SQL Error]:', sqlErr.message);
+      throw sqlErr;
+    }
+
+    if (userResult.rows.length === 0) {
       return res.status(401).json({
         status: 'error',
         message: 'User account no longer exists.',
       });
     }
 
-    // Generate new Access Token
+    const user = userResult.rows[0];
     const newAccessToken = generateAccessToken(user);
-    console.log('[Auth] ✅ Token refreshed for user:', user.id);
+    console.log('[Auth:Refresh] Token refreshed for user:', user.id);
 
     return res.status(200).json({
       status: 'success',
@@ -295,7 +347,7 @@ const refresh = async (req, res) => {
       },
     });
   } catch (error) {
-    console.log('[Auth] Refresh token invalid or expired');
+    console.error('[Auth:Refresh Error]:', error.message);
     return res.status(401).json({
       status: 'error',
       message: 'Invalid or expired refresh token.',
@@ -313,10 +365,10 @@ const logout = async (req, res) => {
     const refreshToken = req.body.refreshToken || req.cookies?.refreshToken;
 
     if (refreshToken) {
-      if (pool) {
-        await query('DELETE FROM sessions WHERE token_hash = $1', [refreshToken]).catch(() => {});
-      } else if (memoryDb.sessions) {
-        memoryDb.sessions = memoryDb.sessions.filter((s) => s.token_hash !== refreshToken);
+      try {
+        await query('DELETE FROM sessions WHERE token_hash = $1', [refreshToken]);
+      } catch (sqlErr) {
+        console.error('[Auth:Logout SQL Error]:', sqlErr.message);
       }
     }
 
@@ -327,6 +379,7 @@ const logout = async (req, res) => {
       message: 'Logged out successfully.',
     });
   } catch (error) {
+    console.error('[Auth:Logout Error]:', error.message);
     return res.status(500).json({
       status: 'error',
       message: 'Error during logout.',
@@ -343,23 +396,26 @@ const getMe = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    let user = null;
-    if (pool) {
-      const result = await query(
+    let result;
+    try {
+      result = await query(
         'SELECT id, email, display_name, avatar_url, role, theme_preference, created_at FROM users WHERE id = $1',
         [userId]
       );
-      user = result.rows[0];
-    } else {
-      user = memoryDb.users.find((u) => u.id === userId);
+    } catch (sqlErr) {
+      console.error('[Auth:Me SQL Error]:', sqlErr.message);
+      throw sqlErr;
     }
 
-    if (!user) {
+    if (result.rows.length === 0) {
+      console.log('[Auth:Me] User not found:', userId);
       return res.status(404).json({
         status: 'error',
         message: 'User profile not found.',
       });
     }
+
+    const user = result.rows[0];
 
     return res.status(200).json({
       status: 'success',
@@ -367,14 +423,16 @@ const getMe = async (req, res) => {
         user: {
           id: user.id,
           email: user.email,
-          displayName: user.display_name || user.displayName,
-          avatarUrl: user.avatar_url || user.avatarUrl || null,
+          displayName: user.display_name,
+          avatarUrl: user.avatar_url || null,
           role: user.role,
+          themePreference: user.theme_preference || 'dark',
+          createdAt: user.created_at,
         },
       },
     });
   } catch (error) {
-    console.error('[Auth] getMe error:', error.message);
+    console.error('[Auth:Me Error]:', error.message);
     return res.status(500).json({
       status: 'error',
       message: 'Error fetching user profile.',

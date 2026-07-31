@@ -2,14 +2,24 @@ import axios from 'axios';
 import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
 
 /**
+ * Determine production or local API Base URL cleanly without hardcoded localhost in production
+ */
+const getBaseUrl = (): string => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
+    return envUrl.replace(/\/+$/, '');
+  }
+  // If deployed in production without VITE_API_URL set, fallback to default relative /api or localhost
+  return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:5000/api'
+    : '/api';
+};
+
+/**
  * Pre-configured Axios instance for all API calls.
- *
- * - Base URL defaults to `/api` (proxied by Vite in dev, or set via VITE_API_URL in prod).
- * - Automatically attaches JWT access token from localStorage or sessionStorage.
- * - Handles 401 responses with automatic refresh token rotation & request retries.
  */
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api',
+  baseURL: getBaseUrl(),
   timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
@@ -45,22 +55,41 @@ const getRefreshToken = (): string | null => {
   return localStorage.getItem('refreshToken') || sessionStorage.getItem('refreshToken');
 };
 
-// ── Request Interceptor: attach Bearer access token ──
+// ── Request Interceptor: attach Bearer access token & detailed logging ──
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     const token = getAccessToken();
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+
+    const fullUrl = `${config.baseURL || ''}${config.url || ''}`;
+    console.log(`[API Request] ${config.method?.toUpperCase()} ${fullUrl}`);
+    if (config.data) {
+      // Print request payload (mask password for security logging)
+      const logData = { ...config.data };
+      if (logData.password) logData.password = '***MASKED***';
+      console.log('[API Request Body]:', logData);
+    }
+
     return config;
   },
   (error: AxiosError) => Promise.reject(error),
 );
 
-// ── Response Interceptor: refresh token rotation & auth handling ──
+// ── Response Interceptor: refresh token rotation & detailed logging ──
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    console.log(`[API Response] ${response.status} OK (${response.config.method?.toUpperCase()} ${response.config.url})`);
+    return response;
+  },
   async (error: AxiosError) => {
+    const status = error.response?.status || 'Network/CORS Error';
+    console.error(`[API Response Error] Status: ${status} (${error.config?.method?.toUpperCase()} ${error.config?.url})`);
+    if (error.response?.data) {
+      console.error('[API Response Body]:', error.response.data);
+    }
+
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 
     if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
@@ -102,7 +131,7 @@ api.interceptors.response.use(
 
       try {
         const res = await axios.post<{ status: string; data: { token: string } }>(
-          `${import.meta.env.VITE_API_URL || '/api'}/auth/refresh`,
+          `${getBaseUrl()}/auth/refresh`,
           { refreshToken },
           { withCredentials: true }
         );

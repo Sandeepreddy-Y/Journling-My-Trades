@@ -1,11 +1,12 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { Toaster } from 'react-hot-toast';
+import toast, { Toaster } from 'react-hot-toast';
 
 import { MainLayout } from '@/components/layout';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import ErrorBoundary from '@/components/common/ErrorBoundary';
 import { useKeyboardShortcuts } from '@/hooks';
+import { getSocket } from '@/lib/socket';
 
 // ── Lazy-Loaded Auth Pages ──
 const AuthLayout = lazy(() => import('@/pages/auth/AuthLayout'));
@@ -41,6 +42,20 @@ function PageLoader() {
 
 function AppRoutes() {
   useKeyboardShortcuts();
+
+  useEffect(() => {
+    const socket = getSocket();
+    const handleTradeSynced = (data: { message?: string; trade?: any }) => {
+      console.log('[RealTime Sync] Trade received from MT5 EA:', data);
+      toast.success(data.message || '⚡ New trade auto-synced from MT5!');
+      window.dispatchEvent(new CustomEvent('trades-updated'));
+    };
+
+    socket.on('trade:synced', handleTradeSynced);
+    return () => {
+      socket.off('trade:synced', handleTradeSynced);
+    };
+  }, []);
 
   return (
     <Suspense fallback={<PageLoader />}>

@@ -1,6 +1,51 @@
-const { query, memoryDb, pool } = require('../config/db');
+const { query } = require('../config/db');
+const { parseStatementFile } = require('../utils/tradeParsers');
 
-// Helper to compute PnL, Outcome, Risk:Reward
+/**
+ * Mapper: Converts PostgreSQL snake_case rows to frontend camelCase Trade objects
+ */
+const mapRowToTrade = (row) => {
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    broker: row.broker || 'MetaTrader 5',
+    accountName: row.account_name || 'Standard Real Account',
+    symbol: row.symbol,
+    assetClass: row.asset_class || 'forex',
+    direction: row.direction,
+    entryPrice: parseFloat(row.entry_price),
+    exitPrice: row.exit_price ? parseFloat(row.exit_price) : null,
+    lotSize: row.lot_size ? parseFloat(row.lot_size) : null,
+    stopLoss: row.stop_loss ? parseFloat(row.stop_loss) : null,
+    takeProfit: row.take_profit ? parseFloat(row.take_profit) : null,
+    riskAmount: row.risk_amount ? parseFloat(row.risk_amount) : null,
+    rewardAmount: row.reward_amount ? parseFloat(row.reward_amount) : null,
+    riskReward: row.risk_reward ? parseFloat(row.risk_reward) : null,
+    beforeScreenshot: row.before_screenshot || null,
+    afterScreenshot: row.after_screenshot || null,
+    entryTime: row.entry_time,
+    exitTime: row.exit_time || null,
+    fees: parseFloat(row.fees || 0),
+    swap: parseFloat(row.swap || 0),
+    pnl: row.pnl !== null ? parseFloat(row.pnl) : null,
+    pnlPips: row.pnl_pips !== null ? parseFloat(row.pnl_pips) : null,
+    outcome: row.outcome || 'open',
+    emotion: row.emotion || null,
+    rating: row.rating ? parseInt(row.rating, 10) : null,
+    notes: row.notes || '',
+    session: row.session || null,
+    setupTag: row.setup_tag || null,
+    status: row.status || 'closed',
+    screenshots: [],
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+};
+
+/**
+ * Helper to compute PnL, Outcome, Risk:Reward
+ */
 const calculateTradeMetrics = (data) => {
   const entry = parseFloat(data.entryPrice) || 0;
   const exit = parseFloat(data.exitPrice) || null;
@@ -92,88 +137,75 @@ const createTrade = async (req, res) => {
 
     const computed = calculateTradeMetrics(req.body);
 
-    const newTrade = {
-      id: `trade-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      userId,
-      broker: req.body.broker || 'MetaTrader 5',
-      accountName: req.body.accountName || req.body.account || 'Standard Real Account',
-      symbol: req.body.symbol.toUpperCase().trim(),
-      assetClass: req.body.assetClass || 'forex',
-      direction: (req.body.direction || 'long').toLowerCase(),
-      entryPrice: parseFloat(req.body.entryPrice),
-      exitPrice: req.body.exitPrice ? parseFloat(req.body.exitPrice) : null,
-      lotSize: parseFloat(req.body.lotSize),
-      stopLoss: req.body.stopLoss ? parseFloat(req.body.stopLoss) : null,
-      takeProfit: req.body.takeProfit ? parseFloat(req.body.takeProfit) : null,
-      riskAmount: computed.riskAmount,
-      rewardAmount: computed.rewardAmount,
-      riskReward: computed.riskReward,
-      entryTime: req.body.entryTime || req.body.date || new Date().toISOString(),
-      exitTime: req.body.exitTime || null,
-      fees: parseFloat(req.body.commission || req.body.fees || 0),
-      swap: parseFloat(req.body.swap || 0),
-      pnl: computed.pnl,
-      outcome: computed.outcome,
-      emotion: req.body.emotion || 'disciplined',
-      rating: parseInt(req.body.rating || 5, 10),
-      notes: req.body.notes || '',
-      session: req.body.session || 'london',
-      setupTag: req.body.setup || req.body.setupTag || 'General Setup',
-      beforeScreenshot: req.body.beforeScreenshot || null,
-      afterScreenshot: req.body.afterScreenshot || null,
-      status: req.body.exitPrice ? 'closed' : 'open',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    const broker = req.body.broker || 'MetaTrader 5';
+    const accountName = req.body.accountName || req.body.account || 'Standard Real Account';
+    const symbol = req.body.symbol.toUpperCase().trim();
+    const assetClass = req.body.assetClass || 'forex';
+    const direction = (req.body.direction || 'long').toLowerCase();
+    const entryPrice = parseFloat(req.body.entryPrice);
+    const exitPrice = req.body.exitPrice ? parseFloat(req.body.exitPrice) : null;
+    const lotSize = parseFloat(req.body.lotSize);
+    const stopLoss = req.body.stopLoss ? parseFloat(req.body.stopLoss) : null;
+    const takeProfit = req.body.takeProfit ? parseFloat(req.body.takeProfit) : null;
+    const entryTime = req.body.entryTime || req.body.date || new Date().toISOString();
+    const exitTime = req.body.exitTime || null;
+    const fees = parseFloat(req.body.commission || req.body.fees || 0);
+    const swap = parseFloat(req.body.swap || 0);
+    const emotion = req.body.emotion || 'disciplined';
+    const rating = parseInt(req.body.rating || 5, 10);
+    const notes = req.body.notes || '';
+    const session = req.body.session || 'london';
+    const setupTag = req.body.setup || req.body.setupTag || 'General Setup';
+    const beforeScreenshot = req.body.beforeScreenshot || null;
+    const afterScreenshot = req.body.afterScreenshot || null;
+    const status = req.body.exitPrice ? 'closed' : 'open';
 
-    if (pool) {
-      const result = await query(
-        `INSERT INTO trades
-        (user_id, broker, account_name, symbol, asset_class, direction, entry_price, exit_price, lot_size, stop_loss, take_profit, risk_amount, reward_amount, risk_reward, entry_time, exit_time, fees, swap, pnl, outcome, emotion, rating, notes, session, setup_tag, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
-        RETURNING *`,
-        [
-          userId,
-          newTrade.broker,
-          newTrade.accountName,
-          newTrade.symbol,
-          newTrade.assetClass,
-          newTrade.direction,
-          newTrade.entryPrice,
-          newTrade.exitPrice,
-          newTrade.lotSize,
-          newTrade.stopLoss,
-          newTrade.takeProfit,
-          newTrade.riskAmount,
-          newTrade.rewardAmount,
-          newTrade.riskReward,
-          newTrade.entryTime,
-          newTrade.exitTime,
-          newTrade.fees,
-          newTrade.swap,
-          newTrade.pnl,
-          newTrade.outcome,
-          newTrade.emotion,
-          newTrade.rating,
-          newTrade.notes,
-          newTrade.session,
-          newTrade.setupTag,
-          newTrade.status,
-        ]
-      );
-      newTrade.id = result.rows[0].id;
-    } else {
-      if (!memoryDb.trades) memoryDb.trades = [];
-      memoryDb.trades.unshift(newTrade);
-    }
+    const result = await query(
+      `INSERT INTO trades
+      (user_id, broker, account_name, symbol, asset_class, direction, entry_price, exit_price, lot_size, stop_loss, take_profit, risk_amount, reward_amount, risk_reward, before_screenshot, after_screenshot, entry_time, exit_time, fees, swap, pnl, outcome, emotion, rating, notes, session, setup_tag, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+      RETURNING *`,
+      [
+        userId,
+        broker,
+        accountName,
+        symbol,
+        assetClass,
+        direction,
+        entryPrice,
+        exitPrice,
+        lotSize,
+        stopLoss,
+        takeProfit,
+        computed.riskAmount,
+        computed.rewardAmount,
+        computed.riskReward,
+        beforeScreenshot,
+        afterScreenshot,
+        entryTime,
+        exitTime,
+        fees,
+        swap,
+        computed.pnl,
+        computed.outcome,
+        emotion,
+        rating,
+        notes,
+        session,
+        setupTag,
+        status,
+      ]
+    );
+
+    const createdTrade = mapRowToTrade(result.rows[0]);
 
     return res.status(201).json({
       status: 'success',
       message: 'Trade logged successfully.',
-      data: { trade: newTrade },
+      data: { trade: createdTrade },
     });
   } catch (error) {
-    console.error('[Create Trade Error]', error);
+    console.error('[Create Trade Error]:', error.message, error.stack);
     return res.status(500).json({ status: 'error', message: 'Failed to create trade execution.' });
   }
 };
@@ -188,14 +220,8 @@ const getTrades = async (req, res) => {
     const userId = req.user.id;
     const { symbol, direction, outcome, session, assetClass } = req.query;
 
-    let trades = [];
-
-    if (pool) {
-      const result = await query('SELECT * FROM trades WHERE user_id = $1 ORDER BY entry_time DESC', [userId]);
-      trades = result.rows;
-    } else {
-      trades = (memoryDb.trades || []).filter((t) => t.userId === userId);
-    }
+    const result = await query('SELECT * FROM trades WHERE user_id = $1 ORDER BY entry_time DESC', [userId]);
+    const trades = result.rows.map(mapRowToTrade);
 
     let filtered = [...trades];
 
@@ -223,7 +249,7 @@ const getTrades = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('[Get Trades Error]', error);
+    console.error('[Get Trades Error]:', error.message, error.stack);
     return res.status(500).json({ status: 'error', message: 'Failed to fetch trade log.' });
   }
 };
@@ -238,21 +264,15 @@ const getTradeById = async (req, res) => {
     const userId = req.user.id;
     const { id } = req.params;
 
-    let trade = null;
-
-    if (pool) {
-      const result = await query('SELECT * FROM trades WHERE id = $1 AND user_id = $2', [id, userId]);
-      trade = result.rows[0];
-    } else {
-      trade = (memoryDb.trades || []).find((t) => t.id === id && t.userId === userId);
-    }
-
-    if (!trade) {
+    const result = await query('SELECT * FROM trades WHERE id = $1 AND user_id = $2', [id, userId]);
+    if (result.rows.length === 0) {
       return res.status(404).json({ status: 'error', message: 'Trade execution record not found.' });
     }
 
+    const trade = mapRowToTrade(result.rows[0]);
     return res.status(200).json({ status: 'success', data: { trade } });
   } catch (error) {
+    console.error('[Get Trade By ID Error]:', error.message);
     return res.status(500).json({ status: 'error', message: 'Error fetching trade record.' });
   }
 };
@@ -267,59 +287,46 @@ const updateTrade = async (req, res) => {
     const userId = req.user.id;
     const { id } = req.params;
 
-    let existing = null;
-    if (pool) {
-      const result = await query('SELECT * FROM trades WHERE id = $1 AND user_id = $2', [id, userId]);
-      existing = result.rows[0];
-    } else {
-      existing = (memoryDb.trades || []).find((t) => t.id === id && t.userId === userId);
-    }
-
-    if (!existing) {
+    const existingResult = await query('SELECT * FROM trades WHERE id = $1 AND user_id = $2', [id, userId]);
+    if (existingResult.rows.length === 0) {
       return res.status(404).json({ status: 'error', message: 'Trade record not found.' });
     }
 
+    const existing = mapRowToTrade(existingResult.rows[0]);
     const updatedData = { ...existing, ...req.body };
     const computed = calculateTradeMetrics(updatedData);
 
-    updatedData.pnl = computed.pnl;
-    updatedData.outcome = computed.outcome;
-    updatedData.riskReward = computed.riskReward;
-    updatedData.updatedAt = new Date().toISOString();
+    const updateResult = await query(
+      `UPDATE trades SET
+       symbol=$1, direction=$2, entry_price=$3, exit_price=$4, lot_size=$5, stop_loss=$6, take_profit=$7,
+       pnl=$8, outcome=$9, emotion=$10, rating=$11, notes=$12, session=$13, setup_tag=$14, updated_at=NOW()
+       WHERE id=$15 AND user_id=$16
+       RETURNING *`,
+      [
+        updatedData.symbol,
+        updatedData.direction,
+        updatedData.entryPrice,
+        updatedData.exitPrice,
+        updatedData.lotSize,
+        updatedData.stopLoss,
+        updatedData.takeProfit,
+        computed.pnl,
+        computed.outcome,
+        updatedData.emotion,
+        updatedData.rating,
+        updatedData.notes,
+        updatedData.session,
+        updatedData.setupTag,
+        id,
+        userId,
+      ]
+    );
 
-    if (pool) {
-      await query(
-        `UPDATE trades SET
-         symbol=$1, direction=$2, entry_price=$3, exit_price=$4, lot_size=$5, stop_loss=$6, take_profit=$7,
-         pnl=$8, outcome=$9, emotion=$10, rating=$11, notes=$12, session=$13, setup_tag=$14, updated_at=NOW()
-         WHERE id=$15 AND user_id=$16`,
-        [
-          updatedData.symbol,
-          updatedData.direction,
-          updatedData.entryPrice,
-          updatedData.exitPrice,
-          updatedData.lotSize,
-          updatedData.stopLoss,
-          updatedData.takeProfit,
-          updatedData.pnl,
-          updatedData.outcome,
-          updatedData.emotion,
-          updatedData.rating,
-          updatedData.notes,
-          updatedData.session,
-          updatedData.setupTag,
-          id,
-          userId,
-        ]
-      );
-    } else {
-      const idx = memoryDb.trades.findIndex((t) => t.id === id && t.userId === userId);
-      if (idx !== -1) memoryDb.trades[idx] = updatedData;
-    }
-
-    return res.status(200).json({ status: 'success', data: { trade: updatedData } });
+    const updatedTrade = mapRowToTrade(updateResult.rows[0]);
+    return res.status(200).json({ status: 'success', data: { trade: updatedTrade } });
   } catch (error) {
-    return res.status(500).json({ status: 'error', message: 'Failed to update trade.' });
+    console.error('[Update Trade Error]:', error.message);
+    return res.status(500).json({ status: 'error', message: 'Failed to update trade record.' });
   }
 };
 
@@ -333,20 +340,16 @@ const deleteTrade = async (req, res) => {
     const userId = req.user.id;
     const { id } = req.params;
 
-    if (pool) {
-      const result = await query('DELETE FROM trades WHERE id = $1 AND user_id = $2 RETURNING id', [id, userId]);
-      if (result.rowCount === 0) {
-        return res.status(404).json({ status: 'error', message: 'Trade record not found.' });
-      }
-    } else {
-      if (memoryDb.trades) {
-        memoryDb.trades = memoryDb.trades.filter((t) => !(t.id === id && t.userId === userId));
-      }
+    const result = await query('DELETE FROM trades WHERE id = $1 AND user_id = $2 RETURNING id', [id, userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Trade not found or already deleted.' });
     }
 
-    return res.status(200).json({ status: 'success', message: 'Trade deleted successfully.' });
+    return res.status(200).json({ status: 'success', message: 'Trade execution deleted successfully.' });
   } catch (error) {
-    return res.status(500).json({ status: 'error', message: 'Error deleting trade.' });
+    console.error('[Delete Trade Error]:', error.message);
+    return res.status(500).json({ status: 'error', message: 'Failed to delete trade execution.' });
   }
 };
 
@@ -358,173 +361,137 @@ const deleteTrade = async (req, res) => {
 const importTrades = async (req, res) => {
   try {
     const userId = req.user.id;
+    console.log('[TradeImport] --------------------------------------------------');
+    console.log('[TradeImport] Start processing statement import for user:', userId);
 
-    // Sample execution batch if file parsing is requested or fallback
-    const sampleBatch = [
-      { symbol: 'XAU/USD', assetClass: 'commodities', direction: 'long', entryPrice: 2382.50, exitPrice: 2396.80, lotSize: 2.0, stopLoss: 2378.00, takeProfit: 2400.00, pnl: 2860.00, outcome: 'win', session: 'london', setupTag: 'Liquidity Grab + FVG', entryTime: '2026-07-25T14:30:00Z', exitTime: '2026-07-25T16:45:00Z' },
-      { symbol: 'EUR/USD', assetClass: 'forex', direction: 'short', entryPrice: 1.0895, exitPrice: 1.0862, lotSize: 5.0, stopLoss: 1.0910, takeProfit: 1.0850, pnl: 1650.00, outcome: 'win', session: 'london', setupTag: 'Order Block Retest', entryTime: '2026-07-26T09:15:00Z', exitTime: '2026-07-26T12:00:00Z' },
-      { symbol: 'NAS100', assetClass: 'indices', direction: 'long', entryPrice: 19850.00, exitPrice: 19780.00, lotSize: 1.5, stopLoss: 19780.00, takeProfit: 20000.00, pnl: -1050.00, outcome: 'loss', session: 'new_york', setupTag: 'Breakout & Retest', entryTime: '2026-07-27T15:30:00Z', exitTime: '2026-07-27T16:10:00Z' },
-      { symbol: 'BTC/USD', assetClass: 'crypto', direction: 'long', entryPrice: 65400.00, exitPrice: 67200.00, lotSize: 0.5, stopLoss: 64800.00, takeProfit: 67500.00, pnl: 900.00, outcome: 'win', session: 'tokyo', setupTag: 'Liquidity Grab + FVG', entryTime: '2026-07-28T21:00:00Z', exitTime: '2026-07-29T08:30:00Z' },
-      { symbol: 'GBP/USD', assetClass: 'forex', direction: 'short', entryPrice: 1.2880, exitPrice: 1.2820, lotSize: 3.0, stopLoss: 1.2905, takeProfit: 1.2820, pnl: 1800.00, outcome: 'win', session: 'london', setupTag: 'Order Block Retest', entryTime: '2026-07-29T08:00:00Z', exitTime: '2026-07-29T11:30:00Z' },
-      { symbol: 'US30', assetClass: 'indices', direction: 'long', entryPrice: 39800.00, exitPrice: 39650.00, lotSize: 1.0, stopLoss: 39650.00, takeProfit: 40000.00, pnl: -1500.00, outcome: 'loss', session: 'new_york', setupTag: 'Impulse Breakout', entryTime: '2026-07-29T16:00:00Z', exitTime: '2026-07-29T17:15:00Z' },
-      { symbol: 'USD/JPY', assetClass: 'forex', direction: 'long', entryPrice: 154.20, exitPrice: 155.10, lotSize: 4.0, stopLoss: 153.80, takeProfit: 155.50, pnl: 2320.00, outcome: 'win', session: 'tokyo', setupTag: 'Fair Value Gap Fill', entryTime: '2026-07-30T01:30:00Z', exitTime: '2026-07-30T06:00:00Z' },
-      { symbol: 'AUD/USD', assetClass: 'forex', direction: 'long', entryPrice: 0.6540, exitPrice: 0.6585, lotSize: 3.0, stopLoss: 0.6515, takeProfit: 0.6600, pnl: 1350.00, outcome: 'win', session: 'sydney', setupTag: 'Order Block Retest', entryTime: '2026-07-30T07:00:00Z', exitTime: '2026-07-30T10:45:00Z' },
-      { symbol: 'XAU/USD', assetClass: 'commodities', direction: 'short', entryPrice: 2410.00, exitPrice: 2395.00, lotSize: 1.5, stopLoss: 2418.00, takeProfit: 2390.00, pnl: 2250.00, outcome: 'win', session: 'overlap', setupTag: 'Liquidity Grab + FVG', entryTime: '2026-07-30T13:30:00Z', exitTime: '2026-07-30T15:20:00Z' },
-      { symbol: 'ETH/USD', assetClass: 'crypto', direction: 'short', entryPrice: 3450.00, exitPrice: 3490.00, lotSize: 2.0, stopLoss: 3490.00, takeProfit: 3380.00, pnl: -800.00, outcome: 'loss', session: 'new_york', setupTag: 'Impulse Breakout', entryTime: '2026-07-30T18:00:00Z', exitTime: '2026-07-30T19:40:00Z' },
-    ];
-
-    let rawTrades = sampleBatch;
-
-    // Parse uploaded file buffer if provided
-    if (req.file && req.file.buffer) {
-      const fileText = req.file.buffer.toString('utf-8');
-      const lines = fileText.split('\n').map((l) => l.trim()).filter(Boolean);
-      const parsed = [];
-
-      for (let i = 1; i < lines.length; i++) {
-        const parts = lines[i].split(',').map((p) => p.replace(/"/g, '').trim());
-        if (parts.length >= 6) {
-          const sym = parts[0] || parts[4] || 'EUR/USD';
-          const dir = (parts[1] || parts[2] || 'long').toLowerCase().includes('sell') ? 'short' : 'long';
-          const lots = parseFloat(parts[2] || parts[3] || 1.0) || 1.0;
-          const entryP = parseFloat(parts[3] || parts[5] || 1.0) || 1.0;
-          const exitP = parseFloat(parts[4] || parts[9] || entryP) || entryP;
-          const pnlVal = parseFloat(parts[parts.length - 1] || 0) || 0;
-
-          parsed.push({
-            symbol: sym.toUpperCase(),
-            assetClass: 'forex',
-            direction: dir,
-            entryPrice: entryP,
-            exitPrice: exitP,
-            lotSize: lots,
-            stopLoss: null,
-            takeProfit: null,
-            pnl: pnlVal,
-            outcome: pnlVal > 0 ? 'win' : pnlVal < 0 ? 'loss' : 'breakeven',
-            session: 'london',
-            setupTag: 'Statement Import',
-            entryTime: new Date().toISOString(),
-            exitTime: new Date().toISOString(),
-          });
-        }
-      }
-      if (parsed.length > 0) rawTrades = parsed;
+    if (!req.file || !req.file.buffer) {
+      console.log('[TradeImport] ❌ Error: No file attached in request payload');
+      return res.status(400).json({
+        status: 'error',
+        message: 'No file received. Please attach a valid MT4/MT5/cTrader statement file (.csv or .html).',
+      });
     }
+
+    // 1. File Received Verification & Detailed Logging
+    console.log('[TradeImport] req.file object:', {
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      bufferLength: req.file.buffer ? req.file.buffer.length : 0,
+    });
+
+    const filename = req.file.originalname;
+
+    // 2. Parse Statement File with Format & Parser Detection
+    let parseResult;
+    try {
+      parseResult = parseStatementFile(req.file.buffer, filename);
+    } catch (parseErr) {
+      console.error(`[TradeImport Parsing Failure]: ${parseErr.message}`);
+      console.error('[TradeImport Stack Trace]:', parseErr.stack);
+      return res.status(400).json({
+        status: 'error',
+        message: parseErr.message,
+      });
+    }
+
+    const { detectedType, parserSelected, trades: parsedTrades } = parseResult;
+    console.log(`[TradeImport] File type detected: ${detectedType}`);
+    console.log(`[TradeImport] Parser selected: ${parserSelected}`);
+    console.log(`[TradeImport] Number of trades detected: ${parsedTrades.length}`);
 
     let importedCount = 0;
     let duplicateCount = 0;
     let totalImportedPnl = 0;
+    const insertedTrades = [];
 
-    for (const item of rawTrades) {
-      const tradeId = `import-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    for (const item of parsedTrades) {
       const computedPnl = parseFloat(item.pnl) || 0;
 
-      const newTrade = {
-        id: tradeId,
-        userId,
-        broker: 'MetaTrader 5 Statement',
-        accountName: 'Imported Statement Account',
-        symbol: item.symbol,
-        assetClass: item.assetClass || 'forex',
-        direction: item.direction,
-        entryPrice: parseFloat(item.entryPrice),
-        exitPrice: item.exitPrice ? parseFloat(item.exitPrice) : null,
-        lotSize: parseFloat(item.lotSize),
-        stopLoss: item.stopLoss ? parseFloat(item.stopLoss) : null,
-        takeProfit: item.takeProfit ? parseFloat(item.takeProfit) : null,
-        riskAmount: item.stopLoss ? Math.abs(item.entryPrice - item.stopLoss) * item.lotSize * 100 : null,
-        rewardAmount: item.takeProfit ? Math.abs(item.takeProfit - item.entryPrice) * item.lotSize * 100 : null,
-        riskReward: 2.0,
-        entryTime: item.entryTime,
-        exitTime: item.exitTime,
-        fees: 5.0,
-        swap: 0,
-        pnl: computedPnl,
-        outcome: item.outcome,
-        emotion: 'disciplined',
-        rating: 5,
-        notes: `Imported via Statement Import on ${new Date().toLocaleDateString()}`,
-        session: item.session || 'london',
-        setupTag: item.setupTag || 'Statement Import',
-        status: 'closed',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
+      // Duplicate Detection Logging
+      const dupCheck = await query(
+        `SELECT id FROM trades
+         WHERE user_id = $1 AND symbol = $2 AND entry_time = $3 AND lot_size = $4`,
+        [userId, item.symbol, item.entryTime, item.lotSize]
+      );
 
-      if (pool) {
-        // Check duplicate
-        const dupCheck = await query(
-          'SELECT id FROM trades WHERE user_id = $1 AND symbol = $2 AND entry_time = $3 AND lot_size = $4',
-          [userId, newTrade.symbol, newTrade.entryTime, newTrade.lotSize]
-        );
+      const isDuplicate = dupCheck.rows.length > 0;
+      console.log(`[TradeImport] Duplicate check (Ticket: ${item.ticket}, Symbol: ${item.symbol}, EntryTime: ${item.entryTime}, LotSize: ${item.lotSize}) => Is Duplicate: ${isDuplicate ? 'YES' : 'NO'}`);
 
-        if (dupCheck.rows.length > 0) {
-          duplicateCount += 1;
-          continue;
-        }
-
-        await query(
-          `INSERT INTO trades
-          (user_id, broker, account_name, symbol, asset_class, direction, entry_price, exit_price, lot_size, stop_loss, take_profit, risk_amount, reward_amount, risk_reward, entry_time, exit_time, fees, swap, pnl, outcome, emotion, rating, notes, session, setup_tag, status)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
-          [
-            userId,
-            newTrade.broker,
-            newTrade.accountName,
-            newTrade.symbol,
-            newTrade.assetClass,
-            newTrade.direction,
-            newTrade.entryPrice,
-            newTrade.exitPrice,
-            newTrade.lotSize,
-            newTrade.stopLoss,
-            newTrade.takeProfit,
-            newTrade.riskAmount,
-            newTrade.rewardAmount,
-            newTrade.riskReward,
-            newTrade.entryTime,
-            newTrade.exitTime,
-            newTrade.fees,
-            newTrade.swap,
-            newTrade.pnl,
-            newTrade.outcome,
-            newTrade.emotion,
-            newTrade.rating,
-            newTrade.notes,
-            newTrade.session,
-            newTrade.setupTag,
-            newTrade.status,
-          ]
-        );
-      } else {
-        if (!memoryDb.trades) memoryDb.trades = [];
-        const isDup = memoryDb.trades.some(
-          (t) => t.userId === userId && t.symbol === newTrade.symbol && t.entryTime === newTrade.entryTime && t.lotSize === newTrade.lotSize
-        );
-        if (isDup) {
-          duplicateCount += 1;
-          continue;
-        }
-        memoryDb.trades.unshift(newTrade);
+      if (isDuplicate) {
+        duplicateCount += 1;
+        console.log(`[TradeImport] Skipped duplicate trade (Ticket: ${item.ticket}, Symbol: ${item.symbol}, EntryTime: ${item.entryTime}, LotSize: ${item.lotSize})`);
+        continue;
       }
 
-      importedCount += 1;
-      totalImportedPnl += computedPnl;
+      // Insert into PostgreSQL with unsuppressed SQL error handling
+      try {
+        const insertResult = await query(
+          `INSERT INTO trades
+          (user_id, broker, account_name, symbol, asset_class, direction, entry_price, exit_price, lot_size, stop_loss, take_profit, risk_amount, reward_amount, risk_reward, entry_time, exit_time, fees, swap, pnl, outcome, emotion, rating, notes, session, setup_tag, status)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+          RETURNING *`,
+          [
+            userId,
+            item.broker || 'Statement Import',
+            'Imported Statement Account',
+            item.symbol,
+            item.assetClass || 'forex',
+            item.direction,
+            item.entryPrice,
+            item.exitPrice,
+            item.lotSize,
+            item.stopLoss,
+            item.takeProfit,
+            item.stopLoss ? Math.abs(item.entryPrice - item.stopLoss) * item.lotSize * 100 : null,
+            item.takeProfit ? Math.abs(item.takeProfit - item.entryPrice) * item.lotSize * 100 : null,
+            2.0,
+            item.entryTime,
+            item.exitTime,
+            item.fees || 0,
+            item.swap || 0,
+            computedPnl,
+            item.outcome || (computedPnl > 0 ? 'win' : computedPnl < 0 ? 'loss' : 'breakeven'),
+            'disciplined',
+            5,
+            `Imported from ${filename} on ${new Date().toLocaleDateString()}`,
+            item.session || 'london',
+            item.setupTag || 'Statement Import',
+            'closed',
+          ]
+        );
+
+        const mapped = mapRowToTrade(insertResult.rows[0]);
+        insertedTrades.push(mapped);
+        importedCount += 1;
+        totalImportedPnl += computedPnl;
+      } catch (sqlErr) {
+        console.error(`[TradeImport Database Insert Error]: ${sqlErr.message}`, sqlErr.stack);
+        throw new Error(`Database insert failure for symbol ${item.symbol}: ${sqlErr.message}`);
+      }
     }
+
+    console.log(`[TradeImport] Summary: Rows Found = ${parsedTrades.length}, Rows Parsed = ${parsedTrades.length}, Rows Skipped = ${duplicateCount}, Rows Imported = ${importedCount}`);
+    console.log(`[TradeImport] Total PnL imported: $${totalImportedPnl.toFixed(2)}`);
+    console.log('[TradeImport] --------------------------------------------------');
 
     return res.status(200).json({
       status: 'success',
-      message: `Successfully imported ${importedCount} trade executions into your database.`,
+      message: `Successfully imported ${importedCount} trade executions into your database (${duplicateCount} duplicates skipped).`,
       data: {
         importedCount,
         duplicateCount,
         totalPnl: parseFloat(totalImportedPnl.toFixed(2)),
+        trades: insertedTrades,
       },
     });
   } catch (error) {
-    console.error('[Import Trades Error]', error);
-    return res.status(500).json({ status: 'error', message: 'Failed to parse and import statement file.' });
+    console.error('[TradeImport Exception]:', error.message);
+    console.error('[TradeImport Full Stack Trace]:', error.stack);
+    return res.status(500).json({
+      status: 'error',
+      message: error.message,
+    });
   }
 };
 
@@ -539,25 +506,16 @@ const uploadScreenshot = async (req, res) => {
     const { id } = req.params;
     const { url, timeframe = '15M', caption = '' } = req.body;
 
-    const screenshot = {
-      id: `ss-${Date.now()}`,
-      tradeId: id,
-      url: url || '',
-      timeframe,
-      caption,
-      createdAt: new Date().toISOString(),
-    };
+    const result = await query(
+      `INSERT INTO trade_screenshots (trade_id, url, timeframe, caption)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [id, url || '', timeframe, caption]
+    );
 
-    if (!pool && memoryDb.trades) {
-      const trade = memoryDb.trades.find((t) => t.id === id && t.userId === userId);
-      if (trade) {
-        if (!trade.screenshots) trade.screenshots = [];
-        trade.screenshots.push(screenshot);
-      }
-    }
-
-    return res.status(200).json({ status: 'success', data: { screenshot } });
+    return res.status(200).json({ status: 'success', data: { screenshot: result.rows[0] } });
   } catch (error) {
+    console.error('[Upload Screenshot Error]:', error.message);
     return res.status(500).json({ status: 'error', message: 'Failed to upload screenshot.' });
   }
 };
@@ -570,4 +528,5 @@ module.exports = {
   deleteTrade,
   uploadScreenshot,
   importTrades,
+  mapRowToTrade,
 };

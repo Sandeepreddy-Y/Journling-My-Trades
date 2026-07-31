@@ -5,8 +5,12 @@ import {
   RefreshCw,
   Building,
   X,
+  Info,
+  ShieldCheck,
+  Zap,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { Link } from 'react-router-dom';
 
 import api from '@/lib/axios';
 import { formatCurrency } from '@/lib/helpers';
@@ -38,6 +42,7 @@ export default function PropFirm() {
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   // New Account Form State
   const [newAccountData, setNewAccountData] = useState({
@@ -60,16 +65,15 @@ export default function PropFirm() {
         if (res.data.data.accounts.length > 0 && !selectedAccountId) {
           setSelectedAccountId(res.data.data.accounts[0].id);
         }
-        setLoading(false);
-        setIsRefreshing(false);
-        return;
       }
-    } catch {
-      // Fallback empty state for newly registered user accounts
+    } catch (err: any) {
+      console.error('[PropFirm Fetch Error]:', err.message);
+      toast.error(err.response?.data?.message || 'Failed to load prop firm accounts.');
       setAccounts([]);
+    } finally {
+      setLoading(false);
+      setIsRefreshing(false);
     }
-    setLoading(false);
-    setIsRefreshing(false);
   };
 
   useEffect(() => {
@@ -79,6 +83,7 @@ export default function PropFirm() {
   const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      setSubmitting(true);
       const payload = {
         firmName: newAccountData.firmName,
         accountName: newAccountData.accountName,
@@ -90,27 +95,19 @@ export default function PropFirm() {
         minTradingDays: parseInt(newAccountData.minTradingDays, 10),
       };
 
-      const res = await api.post<{ status: string; data: { account: PropFirmAccountData } }>('/prop-firm', payload);
-      const newAcc = res.data.data.account || {
-        id: `pf-${Date.now()}`,
-        ...payload,
-        currentBalance: payload.accountSize,
-        startingBalance: payload.accountSize,
-        status: 'active',
-        currentDailyLoss: 0,
-        currentTotalDrawdown: 0,
-        currentProfit: 0,
-        tradingDaysCompleted: 0,
-        bestDayProfit: 0,
-        payoutCountdownDays: 14,
-      };
+      const res = await api.post<{ status: string; message: string; data: { account: PropFirmAccountData } }>('/prop-firm', payload);
+      const newAcc = res.data.data.account;
 
       setAccounts((prev) => [newAcc, ...prev]);
       setSelectedAccountId(newAcc.id);
       setIsModalOpen(false);
-      toast.success('Prop firm account connected successfully!');
-    } catch {
-      toast.error('Failed to connect prop firm account');
+      toast.success(res.data.message || 'Prop firm account configured successfully!');
+    } catch (err: any) {
+      console.error('[PropFirm Create Error]:', err);
+      const errorMessage = err.response?.data?.message || err.message || 'Failed to connect prop firm account';
+      toast.error(errorMessage, { duration: 6000 });
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -159,9 +156,29 @@ export default function PropFirm() {
             className="flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-primary to-[#1E88E5] hover:brightness-110 text-white text-xs font-bold rounded-xl shadow-lg shadow-primary/20 transition-all active:scale-95"
           >
             <Plus className="w-4 h-4" />
-            <span>Connect New Account</span>
+            <span>Configure New Challenge</span>
           </button>
         </div>
+      </div>
+
+      {/* ── Official API Notice Banner ── */}
+      <div className="p-4 bg-primary/10 border border-primary/20 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs text-text-secondary">
+        <div className="flex items-start gap-2.5">
+          <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+          <div>
+            <strong className="text-text-bright font-bold">Direct Prop Firm API Integration Notice:</strong>
+            <span className="ml-1">
+              Prop firms (FTMO, FundingPips, Goat Funded, etc.) do not provide public direct-login APIs. To automatically stream trades from your MT5 prop firm account into PostgreSQL in real time, use the <strong className="text-primary">MT5 Auto Sync EA</strong> in Settings.
+            </span>
+          </div>
+        </div>
+
+        <Link
+          to="/settings"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-white font-bold rounded-xl shrink-0 hover:bg-primary/90 transition-all text-[11px]"
+        >
+          <Zap className="w-3.5 h-3.5" /> Setup MT5 Auto Sync
+        </Link>
       </div>
 
       {accounts.length === 0 ? (
@@ -179,7 +196,7 @@ export default function PropFirm() {
             onClick={() => setIsModalOpen(true)}
             className="px-5 py-2.5 bg-primary hover:bg-primary/90 text-white text-xs font-bold rounded-xl shadow-lg transition-all"
           >
-            + Connect First Account
+            + Configure First Challenge
           </button>
         </div>
       ) : (
@@ -254,15 +271,23 @@ export default function PropFirm() {
         </>
       )}
 
-      {/* Modal for Connecting New Prop Account */}
+      {/* Modal for Configuring New Prop Account */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
           <form onSubmit={handleCreateAccount} className="bg-bg-card border border-white/[0.08] rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
-              <h3 className="text-base font-bold text-text-bright">Connect Prop Firm Account</h3>
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-primary" />
+                <h3 className="text-base font-bold text-text-bright">Configure Prop Firm Challenge</h3>
+              </div>
               <button type="button" onClick={() => setIsModalOpen(false)} className="p-1 text-text-muted hover:text-text-bright">
                 <X className="w-5 h-5" />
               </button>
+            </div>
+
+            <div className="p-3 bg-white/[0.02] border border-white/[0.06] rounded-xl text-xs text-text-muted space-y-1">
+              <span className="font-bold text-text-bright block">Drawdown &amp; Rule Tracker</span>
+              <p>Configure your firm's challenge parameters to monitor real-time daily drawdowns and profit targets.</p>
             </div>
 
             <div className="space-y-3 text-xs">
@@ -286,23 +311,72 @@ export default function PropFirm() {
                   type="text"
                   value={newAccountData.accountName}
                   onChange={(e) => setNewAccountData({ ...newAccountData, accountName: e.target.value })}
+                  placeholder="e.g. FTMO $100k Challenge (Phase 1)"
+                  required
                   className="w-full bg-white/[0.03] border border-white/[0.08] text-text-bright rounded-xl p-2.5 outline-none"
                 />
               </div>
 
-              <div>
-                <label className="font-semibold text-text-secondary block mb-1">Account Size ($)</label>
-                <input
-                  type="number"
-                  value={newAccountData.accountSize}
-                  onChange={(e) => setNewAccountData({ ...newAccountData, accountSize: e.target.value })}
-                  className="w-full bg-white/[0.03] border border-white/[0.08] text-text-bright rounded-xl p-2.5 outline-none font-bold"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold text-text-secondary block mb-1">Account Size ($)</label>
+                  <input
+                    type="number"
+                    value={newAccountData.accountSize}
+                    onChange={(e) => setNewAccountData({ ...newAccountData, accountSize: e.target.value })}
+                    required
+                    min="1000"
+                    className="w-full bg-white/[0.03] border border-white/[0.08] text-text-bright rounded-xl p-2.5 outline-none font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-semibold text-text-secondary block mb-1">Phase</label>
+                  <select
+                    value={newAccountData.phase}
+                    onChange={(e) => setNewAccountData({ ...newAccountData, phase: e.target.value as any })}
+                    className="w-full bg-white/[0.03] border border-white/[0.08] text-text-bright rounded-xl p-2.5 outline-none font-bold"
+                  >
+                    <option value="challenge">Challenge (Phase 1)</option>
+                    <option value="verification">Verification (Phase 2)</option>
+                    <option value="funded">Funded Account</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold text-text-secondary block mb-1">Max Daily Loss (%)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={newAccountData.maxDailyLossPercent}
+                    onChange={(e) => setNewAccountData({ ...newAccountData, maxDailyLossPercent: e.target.value })}
+                    required
+                    className="w-full bg-white/[0.03] border border-white/[0.08] text-text-bright rounded-xl p-2.5 outline-none font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-semibold text-text-secondary block mb-1">Max Drawdown (%)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={newAccountData.maxTotalDrawdownPercent}
+                    onChange={(e) => setNewAccountData({ ...newAccountData, maxTotalDrawdownPercent: e.target.value })}
+                    required
+                    className="w-full bg-white/[0.03] border border-white/[0.08] text-text-bright rounded-xl p-2.5 outline-none font-bold"
+                  />
+                </div>
               </div>
             </div>
 
-            <button type="submit" className="w-full py-2.5 bg-primary text-white font-bold text-xs rounded-xl shadow-lg hover:bg-primary/90 transition-all">
-              Save Prop Account
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-full py-2.5 bg-primary text-white font-bold text-xs rounded-xl shadow-lg hover:bg-primary/90 transition-all disabled:opacity-50"
+            >
+              {submitting ? 'Saving Configuration...' : 'Save Challenge Configuration'}
             </button>
           </form>
         </div>

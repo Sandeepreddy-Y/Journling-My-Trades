@@ -1,41 +1,93 @@
-const { Pool } = require('pg');
+const path = require('path');
+const fs = require('fs');
+const dotenv = require('dotenv');
 
-// ── PostgreSQL Pool Configuration ──
-let pool = null;
+// Load .env relative to server directory
+const serverEnvPath = path.resolve(__dirname, '../.env');
+const rootEnvPath = path.resolve(__dirname, '../../.env');
 
-if (process.env.DATABASE_URL) {
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL.includes('neon.tech') || process.env.NODE_ENV === 'production'
-      ? { rejectUnauthorized: false }
-      : false,
-  });
-
-  pool.on('connect', () => {
-    console.log('[DB] Connected to PostgreSQL Database');
-  });
-
-  pool.on('error', (err) => {
-    console.error('[DB Error]', err);
-  });
+if (fs.existsSync(serverEnvPath)) {
+  dotenv.config({ path: serverEnvPath });
+} else if (fs.existsSync(rootEnvPath)) {
+  dotenv.config({ path: rootEnvPath });
+} else {
+  dotenv.config();
 }
 
-// ── In-Memory Store (Isolated Multi-User Local Store) ──
-const memoryDb = {
-  users: [],
-  trades: [],
-  sessions: [],
-  uploads: [],
-  journals: [],
+const { Pool } = require('pg');
+const { PGlite } = require('@electric-sql/pglite');
+
+let pool = null;
+let pgliteInstance = null;
+let dbType = 'none';
+
+const initDb = async () => {
+  if (dbType !== 'none') return;
+
+  const databaseUrl = process.env.DATABASE_URL;
+
+  if (databaseUrl && !databaseUrl.startsWith('pglite')) {
+    console.log('[DB] Attempting connection to PostgreSQL Pool via DATABASE_URL...');
+    try {
+      pool = new Pool({
+        connectionString: databaseUrl,
+        ssl: databaseUrl.includes('neon.tech') || process.env.NODE_ENV === 'production'
+          ? { rejectUnauthorized: false }
+          : false,
+        connectionTimeoutMillis: 3000,
+      });
+
+      const client = await pool.connect();
+      console.log('[DB] ✅ Connected successfully to PostgreSQL Database Server');
+      client.release();
+      dbType = 'pg';
+      return;
+    } catch (err) {
+      console.error('[DB WARNING] Could not connect to external PostgreSQL server:', err.message);
+      console.log('[DB] Initializing embedded PostgreSQL 16 Engine (PGlite) for reliable local operation...');
+    }
+  }
+
+  // Standalone PostgreSQL 16 engine using PGlite
+  console.log('[DB] Initializing embedded PostgreSQL 16 Engine (PGlite)...');
+  pgliteInstance = new PGlite();
+  dbType = 'pglite';
+  console.log('[DB] ✅ Embedded PostgreSQL 16 Database initialized successfully');
+};
+
+const query = async (text, params = []) => {
+  if (dbType === 'none') {
+    await initDb();
+  }
+
+  if (dbType === 'pg' && pool) {
+    return pool.query(text, params);
+  }
+
+  if (dbType === 'pglite' && pgliteInstance) {
+    try {
+      const res = await pgliteInstance.query(text, params);
+      return { rows: res.rows || [] };
+    } catch (err) {
+      if (!params || params.length === 0) {
+        const res = await pgliteInstance.exec(text);
+        const lastResult = Array.isArray(res) ? res[res.length - 1] : res;
+        return { rows: lastResult?.rows || [] };
+      }
+      throw err;
+    }
+  }
+
+  throw new Error('[DB ERROR] PostgreSQL database connection unavailable');
 };
 
 module.exports = {
-  query: async (text, params) => {
-    if (pool) {
-      return pool.query(text, params);
-    }
-    throw new Error('Database pool not initialized. Using memory store.');
+  query,
+  get pool() {
+    return pool;
   },
-  pool,
-  memoryDb,
+  get dbType() {
+    return dbType;
+  },
+  initDb,
 };

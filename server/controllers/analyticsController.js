@@ -1,4 +1,5 @@
-const { query, memoryDb, pool } = require('../config/db');
+const { query } = require('../config/db');
+const { mapRowToTrade } = require('./tradeController');
 
 /**
  * Helper to compute comprehensive institutional analytics metrics from user trade array
@@ -43,8 +44,8 @@ const computeAnalytics = (trades) => {
   const closedTrades = trades.filter((t) => t.status === 'closed' || t.exitPrice !== null || t.outcome);
   const closedCount = closedTrades.length;
 
-  const winningTrades = closedTrades.filter((t) => t.outcome === 'win' || (t.pnl && parseFloat(t.pnl) > 0));
-  const losingTrades = closedTrades.filter((t) => t.outcome === 'loss' || (t.pnl && parseFloat(t.pnl) < 0));
+  const winningTrades = closedTrades.filter((t) => t.outcome === 'win' || (t.pnl !== null && parseFloat(t.pnl) > 0));
+  const losingTrades = closedTrades.filter((t) => t.outcome === 'loss' || (t.pnl !== null && parseFloat(t.pnl) < 0));
 
   const winCount = winningTrades.length;
   const lossCount = losingTrades.length;
@@ -72,8 +73,8 @@ const computeAnalytics = (trades) => {
   const sortedTrades = [...closedTrades].sort((a, b) => new Date(a.entryTime).getTime() - new Date(b.entryTime).getTime());
 
   sortedTrades.forEach((t) => {
-    const isWin = t.outcome === 'win' || (t.pnl && parseFloat(t.pnl) > 0);
-    const isLoss = t.outcome === 'loss' || (t.pnl && parseFloat(t.pnl) < 0);
+    const isWin = t.outcome === 'win' || (t.pnl !== null && parseFloat(t.pnl) > 0);
+    const isLoss = t.outcome === 'loss' || (t.pnl !== null && parseFloat(t.pnl) < 0);
 
     if (isWin) {
       currentWinStreak += 1;
@@ -131,7 +132,7 @@ const computeAnalytics = (trades) => {
   // Advanced Quantitative Ratios (Sharpe, Sortino, Calmar)
   const returns = closedTrades.map((t) => parseFloat(t.pnl) || 0);
   const meanReturn = returns.length > 0 ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
-  
+
   const variance = returns.length > 1
     ? returns.reduce((acc, val) => acc + Math.pow(val - meanReturn, 2), 0) / returns.length
     : 0;
@@ -151,6 +152,8 @@ const computeAnalytics = (trades) => {
   const monthlyMap = {};
   trades.forEach((t) => {
     const d = new Date(t.entryTime);
+    if (isNaN(d.getTime())) return;
+
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     const label = d.toLocaleDateString(undefined, { month: 'short', year: '2-digit' });
 
@@ -172,7 +175,7 @@ const computeAnalytics = (trades) => {
     }
     sessionMap[s].totalPnl += parseFloat(t.pnl) || 0;
     sessionMap[s].tradeCount += 1;
-    if (t.outcome === 'win' || (t.pnl && parseFloat(t.pnl) > 0)) sessionMap[s].wins += 1;
+    if (t.outcome === 'win' || (t.pnl !== null && parseFloat(t.pnl) > 0)) sessionMap[s].wins += 1;
   });
 
   const sessionPerformance = Object.values(sessionMap).map((s) => ({
@@ -192,7 +195,7 @@ const computeAnalytics = (trades) => {
     }
     setupMap[tag].pnl += parseFloat(t.pnl) || 0;
     setupMap[tag].trades += 1;
-    if (t.outcome === 'win' || (t.pnl && parseFloat(t.pnl) > 0)) setupMap[tag].wins += 1;
+    if (t.outcome === 'win' || (t.pnl !== null && parseFloat(t.pnl) > 0)) setupMap[tag].wins += 1;
   });
 
   const topSetups = Object.values(setupMap).map((st) => ({
@@ -250,14 +253,9 @@ const computeAnalytics = (trades) => {
 const getAnalytics = async (req, res) => {
   try {
     const userId = req.user.id;
-    let trades = [];
 
-    if (pool) {
-      const result = await query('SELECT * FROM trades WHERE user_id = $1 ORDER BY entry_time ASC', [userId]);
-      trades = result.rows;
-    } else {
-      trades = (memoryDb.trades || []).filter((t) => t.userId === userId);
-    }
+    const result = await query('SELECT * FROM trades WHERE user_id = $1 ORDER BY entry_time ASC', [userId]);
+    const trades = result.rows.map(mapRowToTrade);
 
     const analyticsData = computeAnalytics(trades);
 
@@ -266,7 +264,7 @@ const getAnalytics = async (req, res) => {
       data: analyticsData,
     });
   } catch (error) {
-    console.error('[Analytics Error]', error);
+    console.error('[Analytics Error]:', error.message, error.stack);
     return res.status(500).json({
       status: 'error',
       message: 'Failed to generate user analytics metrics.',

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Upload, FileSpreadsheet, CheckCircle2, X, Loader2 } from 'lucide-react';
+import { Upload, FileSpreadsheet, CheckCircle2, X, Loader2, PlayCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '@/lib/axios';
 
@@ -20,43 +20,71 @@ export function ImportTradesModal({ onClose, onSuccess }: ImportTradesModalProps
     }
   };
 
-  const handleImport = async () => {
+  const uploadFile = async (targetFile: File) => {
     setIsUploading(true);
     setProgress(20);
 
     const formData = new FormData();
-    if (file) {
-      formData.append('file', file);
-    }
+    formData.append('file', targetFile);
 
     try {
       setProgress(60);
-      const res = await api.post<{ status: string; data: { importedCount: number; duplicateCount: number } }>(
-        '/trades/import',
-        formData,
-        { headers: { 'Content-Type': 'multipart/form-data' } }
-      );
-
-      setProgress(100);
-      setStats({
-        imported: res.data.data.importedCount || 10,
-        duplicates: res.data.data.duplicateCount || 0,
+      const res = await api.post<{
+        status: string;
+        message?: string;
+        data: { importedCount: number; duplicateCount: number; totalPnl: number };
+      }>('/trades/import', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
       });
 
-      // Broadcast global event so Dashboard and Analytics update instantly
+      setProgress(100);
+      const count = res.data.data?.importedCount || 0;
+      const duplicates = res.data.data?.duplicateCount || 0;
+
+      setStats({
+        imported: count,
+        duplicates,
+      });
+
+      // Broadcast global event so Dashboard, Trades, Analytics, and Calendar update instantly
       window.dispatchEvent(new CustomEvent('trades-updated'));
 
-      toast.success(`Successfully imported ${res.data.data.importedCount || 10} trade executions!`);
+      if (count === 0 && duplicates > 0) {
+        toast.success(`Statement processed: All ${duplicates} trades were already imported (duplicates skipped).`);
+      } else {
+        toast.success(res.data.message || `Successfully imported ${count} trade executions!`);
+      }
       onSuccess();
-    } catch {
-      setProgress(100);
-      setStats({ imported: 10, duplicates: 0 });
-      window.dispatchEvent(new CustomEvent('trades-updated'));
-      toast.success('Successfully imported 10 trade executions!');
-      onSuccess();
+    } catch (err: any) {
+      setProgress(0);
+      const errMsg = err.response?.data?.message || err.message || 'Failed to import statement file.';
+      console.error('[Import Error]:', errMsg);
+      toast.error(errMsg);
     } finally {
       setIsUploading(false);
     }
+  };
+
+  const handleImport = async () => {
+    if (!file) {
+      toast.error('Please click "Select Statement File" to choose your MT4/MT5 statement file first!');
+      return;
+    }
+    await uploadFile(file);
+  };
+
+  const handleSampleImport = async () => {
+    const sampleCsvContent = `Ticket,Open Time,Type,Size,Symbol,Open Price,S/L,T/P,Close Time,Close Price,Commission,Swap,Profit
+100101,2026-07-25 10:00:00,buy,1.50,XAUUSD,2380.00,2370.00,2400.00,2026-07-25 14:30:00,2395.00,-10.00,0.00,2250.00
+100102,2026-07-26 09:00:00,sell,2.00,EURUSD,1.0890,1.0920,1.0820,2026-07-26 12:15:00,1.0840,-15.00,0.00,1000.00
+100103,2026-07-27 15:00:00,buy,1.00,US30,39800.00,39650.00,40100.00,2026-07-27 16:30:00,39650.00,-5.00,0.00,-1500.00
+100104,2026-07-28 08:00:00,buy,3.00,GBPUSD,1.2850,1.2800,1.2920,2026-07-28 11:30:00,1.2910,0.00,0.00,1800.00
+100105,2026-07-29 14:00:00,sell,1.00,BTCUSD,65000.00,66000.00,63000.00,2026-07-29 18:00:00,64000.00,0.00,0.00,1000.00`;
+
+    const blob = new Blob([sampleCsvContent], { type: 'text/csv' });
+    const sampleFile = new File([blob], 'Sample_MetaTrader_Statement.csv', { type: 'text/csv' });
+    setFile(sampleFile);
+    await uploadFile(sampleFile);
   };
 
   return (
@@ -66,7 +94,7 @@ export function ImportTradesModal({ onClose, onSuccess }: ImportTradesModalProps
         <div className="flex items-center justify-between border-b border-white/[0.06] pb-4">
           <div className="flex items-center gap-2">
             <FileSpreadsheet className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-extrabold text-text-bright">Import MT4 / MT5 Trade History</h2>
+            <h2 className="text-lg font-extrabold text-text-bright">Import MT4 / MT5 / cTrader Statement</h2>
           </div>
           <button onClick={onClose} className="p-1.5 text-text-muted hover:text-text-bright rounded-lg">
             <X className="w-5 h-5" />
@@ -75,7 +103,7 @@ export function ImportTradesModal({ onClose, onSuccess }: ImportTradesModalProps
 
         {/* Instructions */}
         <p className="text-xs text-text-secondary leading-relaxed">
-          Upload your MetaTrader 4 or MetaTrader 5 account statement file (.csv or .html report) or click &quot;Start Import&quot; to import execution history directly into your user database.
+          Upload your MetaTrader 4, MetaTrader 5, cTrader, DXTrade, or Prop Firm account statement file (.csv or .html report) to import trade executions directly into your PostgreSQL database.
         </p>
 
         {/* Upload Zone */}
@@ -90,17 +118,30 @@ export function ImportTradesModal({ onClose, onSuccess }: ImportTradesModalProps
           <label htmlFor="mt-file-input" className="cursor-pointer flex flex-col items-center justify-center gap-2">
             <Upload className="w-8 h-8 text-primary" />
             <span className="text-xs font-bold text-text-bright">
-              {file ? file.name : 'Select MT4 / MT5 Statement File (.csv, .html)'}
+              {file ? file.name : 'Select Statement File (.csv, .html)'}
             </span>
-            <span className="text-[10px] text-text-muted">Supports MetaTrader 4, MetaTrader 5, cTrader exports</span>
+            <span className="text-[10px] text-text-muted">Supports MT4, MT5, cTrader, DXTrade, FTMO, Funding Pips exports</span>
           </label>
+        </div>
+
+        {/* Sample Statement Import Shortcut */}
+        <div className="flex items-center justify-center">
+          <button
+            onClick={handleSampleImport}
+            disabled={isUploading}
+            type="button"
+            className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 font-semibold hover:underline"
+          >
+            <PlayCircle className="w-4 h-4" />
+            <span>Or click here to test with a Sample MT4 Statement (5 Trades)</span>
+          </button>
         </div>
 
         {/* Progress Bar */}
         {isUploading && (
           <div className="space-y-1.5">
             <div className="flex justify-between text-xs text-text-muted">
-              <span>Parsing executions & detecting duplicates...</span>
+              <span>Parsing executions & inserting into PostgreSQL...</span>
               <span>{progress}%</span>
             </div>
             <div className="w-full bg-white/[0.08] h-2 rounded-full overflow-hidden">
