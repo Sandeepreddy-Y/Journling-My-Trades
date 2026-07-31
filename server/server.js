@@ -68,17 +68,18 @@ app.use(
   cors({
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      if (origin.endsWith('.vercel.app')) {
+      if (allowedOrigins.includes(origin) || origin.includes('vercel.app')) {
         return callback(null, true);
       }
       return callback(null, true);
     },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
   })
 );
+
+app.options('*', cors());
 
 app.use(cookieParser());
 app.use(express.json({ limit: '20mb' }));

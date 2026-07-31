@@ -2,17 +2,19 @@ import axios from 'axios';
 import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
 
 /**
- * Determine production or local API Base URL cleanly without hardcoded localhost in production
+ * Determine production or local API Base URL cleanly without broken relative paths on Vercel
  */
 const getBaseUrl = (): string => {
   const envUrl = import.meta.env.VITE_API_URL;
   if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
     return envUrl.replace(/\/+$/, '');
   }
-  // If deployed in production without VITE_API_URL set, fallback to default relative /api or localhost
-  return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? 'http://localhost:5000/api'
-    : '/api';
+  // If running locally, target localhost backend port 5000
+  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+    return 'http://localhost:5000/api';
+  }
+  // Default to live Render backend API for production Vercel deployments
+  return 'https://journling-my-trades.onrender.com/api';
 };
 
 /**
