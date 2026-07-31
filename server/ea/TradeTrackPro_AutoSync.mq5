@@ -23,95 +23,19 @@ string   g_queueFilename      = "tradetrack_queue.txt";
 string   g_stateFilename      = "tradetrack_state.txt";
 ulong    g_syncedTickets[];   // Session ticket cache to prevent duplicate network calls
 
-//+------------------------------------------------------------------+
-//| Expert initialization function                                   |
-//+------------------------------------------------------------------+
-int OnInit()
-{
-   Print("[TradeTrackPro EA] Initializing Real-Time Auto Sync EA v1.0.0...");
-
-   if(InpApiKey == "" || InpApiKey == "YOUR_API_KEY_HERE")
-   {
-      Alert("[TradeTrackPro EA] ERROR: Please enter your valid API Key in EA inputs!");
-      return(INIT_PARAMETERS_INCORRECT);
-   }
-
-   // 1. Load Last Synced Ticket State from Terminal Storage / File
-   LoadSyncState();
-
-   // 2. Enable Timer for continuous sync retries and heartbeats (every 5s)
-   EventSetTimer(5);
-
-   // 3. Send Initial Heartbeat
-   SendHeartbeat();
-
-   // 4. Perform Initial Account History Sync (One-time on startup)
-   SyncAccountHistory();
-
-   Print("[TradeTrackPro EA] EA initialized successfully. Monitoring MT5 account #", IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)));
-   return(INIT_SUCCEEDED);
-}
-
-//+------------------------------------------------------------------+
-//| Expert deinitialization function                                 |
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-   EventKillTimer();
-   SaveSyncState();
-   ArrayFree(g_syncedTickets);
-   Print("[TradeTrackPro EA] EA Deinitialized. Reason code: ", reason);
-}
-
-//+------------------------------------------------------------------+
-//| Expert tick function                                             |
-//+------------------------------------------------------------------+
-void OnTick()
-{
-   // Continuous live monitoring on price ticks
-   ScanAndSyncClosedTrades();
-}
-
-//+------------------------------------------------------------------+
-//| Timer event function                                             |
-//+------------------------------------------------------------------+
-void OnTimer()
-{
-   datetime now = TimeCurrent();
-
-   // Heartbeat check every N seconds (Default 60s)
-   if(now - g_lastHeartbeat >= InpHeartbeatSec)
-   {
-      SendHeartbeat();
-      g_lastHeartbeat = now;
-   }
-
-   // Process offline retry queue
-   ProcessOfflineQueue();
-}
-
-//+------------------------------------------------------------------+
-//| Trade Transaction event                                          |
-//+------------------------------------------------------------------+
-void OnTradeTransaction(const MqlTradeTransaction& trans,
-                        const MqlTradeRequest& request,
-                        const MqlTradeResult& result)
-{
-   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
-   {
-      Print("[TradeTrackPro EA] ⚡ Live Trade Detected: Deal #", IntegerToString((long)trans.deal));
-      ScanAndSyncClosedTrades();
-   }
-   else if(trans.type == TRADE_TRANSACTION_POSITION)
-   {
-      Print("[TradeTrackPro EA] ⚡ Live Trade Detected: Position Modified #", IntegerToString((long)trans.position));
-      ScanAndSyncClosedTrades();
-   }
-   else if(trans.type == TRADE_TRANSACTION_ORDER_ADD)
-   {
-      Print("[TradeTrackPro EA] ⚡ Live Trade Detected: Order Added #", IntegerToString((long)trans.order));
-   }
-}
+// --- Function Prototypes ---
+void LoadSyncState();
+void SaveSyncState();
+bool IsTicketAlreadySynced(ulong ticket);
+void MarkTicketAsSynced(ulong ticket);
+string TimeToISO(datetime timeVal);
+string EscapeJsonString(string src);
+bool SendHttpPost(string url, string jsonBody, string &responseStr);
+void SendHeartbeat();
+void SyncAccountHistory();
+void ScanAndSyncClosedTrades();
+void QueueTradeLocally(string jsonPayload);
+void ProcessOfflineQueue();
 
 //+------------------------------------------------------------------+
 //| Load Last Synced Ticket State from Global Variable / File       |
@@ -203,13 +127,14 @@ string TimeToISO(datetime timeVal)
 //+------------------------------------------------------------------+
 //| Escape String for JSON                                           |
 //+------------------------------------------------------------------+
-string EscapeJsonString(string str)
+string EscapeJsonString(string src)
 {
-   StringReplace(str, "\\", "\\\\");
-   StringReplace(str, "\"", "\\\"");
-   StringReplace(str, "\r", "");
-   StringReplace(str, "\n", " ");
-   return str;
+   string s = src;
+   StringReplace(s, "\\", "\\\\");
+   StringReplace(s, "\"", "\\\"");
+   StringReplace(s, "\r", "");
+   StringReplace(s, "\n", " ");
+   return s;
 }
 
 //+------------------------------------------------------------------+
@@ -220,7 +145,7 @@ bool SendHttpPost(string url, string jsonBody, string &responseStr)
    string headers = StringFormat("Content-Type: application/json\r\nx-api-key: %s\r\n", InpApiKey);
    char data[];
    char resultData[];
-   string resultHeaders;
+   string resultHeaders = "";
 
    StringToCharArray(jsonBody, data, 0, WHOLE_ARRAY, CP_UTF8);
    int dataLen = ArraySize(data);
@@ -241,11 +166,11 @@ bool SendHttpPost(string url, string jsonBody, string &responseStr)
    int err = GetLastError();
    if(res == -1)
    {
-      Print("[TradeTrackPro EA] ❌ WebRequest Error Code: ", err, ". Ensure '", InpServerUrl, "' is added to MT5 WebRequest allowed URLs list (Tools -> Options -> Expert Advisors).");
+      Print("[TradeTrackPro EA] WebRequest Error Code: ", IntegerToString(err), ". Ensure '", InpServerUrl, "' is added to MT5 WebRequest allowed URLs list.");
    }
    else
    {
-      Print("[TradeTrackPro EA] ❌ HTTP Error Code: ", res, " Response: ", CharArrayToString(resultData, 0, WHOLE_ARRAY, CP_UTF8));
+      Print("[TradeTrackPro EA] HTTP Error Code: ", IntegerToString(res), " Response: ", CharArrayToString(resultData, 0, WHOLE_ARRAY, CP_UTF8));
    }
    return false;
 }
@@ -260,6 +185,10 @@ void SendHeartbeat()
    int openCount = PositionsTotal();
    int buildNum = (int)TerminalInfoInteger(TERMINAL_BUILD);
 
+   string company = AccountInfoString(ACCOUNT_COMPANY);
+   string serverName = AccountInfoString(ACCOUNT_SERVER);
+   string currencyName = AccountInfoString(ACCOUNT_CURRENCY);
+
    string json = StringFormat("{"
                               "\"accountNumber\":\"%s\","
                               "\"broker\":\"%s\","
@@ -272,9 +201,9 @@ void SendHeartbeat()
                               "\"openPositionsCount\":%d"
                               "}",
                               IntegerToString(loginNum),
-                              EscapeJsonString(AccountInfoString(ACCOUNT_COMPANY)),
-                              EscapeJsonString(AccountInfoString(ACCOUNT_SERVER)),
-                              AccountInfoString(ACCOUNT_CURRENCY),
+                              EscapeJsonString(company),
+                              EscapeJsonString(serverName),
+                              currencyName,
                               IntegerToString(loginNum),
                               buildNum,
                               IntegerToString((long)g_lastSyncedTicket),
@@ -283,7 +212,7 @@ void SendHeartbeat()
    string response;
    if(SendHttpPost(url, json, response))
    {
-      Print("[TradeTrackPro EA] 💓 Heartbeat Sent");
+      Print("[TradeTrackPro EA] Heartbeat Sent");
    }
 }
 
@@ -292,16 +221,16 @@ void SendHeartbeat()
 //+------------------------------------------------------------------+
 void SyncAccountHistory()
 {
-   Print("[TradeTrackPro EA] 📜 History Sync Started");
+   Print("[TradeTrackPro EA] History Sync Started");
 
    if(!HistorySelect(0, TimeCurrent()))
    {
-      Print("[TradeTrackPro EA] ⚠️ HistorySelect failed");
+      Print("[TradeTrackPro EA] HistorySelect failed");
       return;
    }
 
    int totalDeals = HistoryDealsTotal();
-   Print("[TradeTrackPro EA] 📜 History Trades Found: ", IntegerToString(totalDeals));
+   Print("[TradeTrackPro EA] History Trades Found: ", IntegerToString(totalDeals));
 
    int uploadedCount = 0;
 
@@ -316,7 +245,7 @@ void SyncAccountHistory()
       long dealType = HistoryDealGetInteger(dealTicket, DEAL_TYPE);
       if(dealType != DEAL_TYPE_BUY && dealType != DEAL_TYPE_SELL) continue;
 
-      ulong positionId = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+      ulong positionId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
       ulong targetTicket = (positionId > 0) ? positionId : dealTicket;
 
       if(targetTicket <= g_lastSyncedTicket)
@@ -342,7 +271,7 @@ void SyncAccountHistory()
       for(int j = 0; j < totalDeals; j++)
       {
          ulong inTicket = HistoryDealGetTicket(j);
-         if(HistoryDealGetInteger(inTicket, DEAL_POSITION_ID) == positionId &&
+         if((ulong)HistoryDealGetInteger(inTicket, DEAL_POSITION_ID) == positionId &&
             (HistoryDealGetInteger(inTicket, DEAL_ENTRY) == DEAL_ENTRY_IN))
          {
             entryPrice = HistoryDealGetDouble(inTicket, DEAL_PRICE);
@@ -354,6 +283,9 @@ void SyncAccountHistory()
       }
 
       long loginNum = (long)AccountInfoInteger(ACCOUNT_LOGIN);
+      string company = AccountInfoString(ACCOUNT_COMPANY);
+      string serverName = AccountInfoString(ACCOUNT_SERVER);
+      string currencyName = AccountInfoString(ACCOUNT_CURRENCY);
 
       string jsonPayload = StringFormat("{"
                                        "\"ticket\":\"%s\","
@@ -393,9 +325,9 @@ void SyncAccountHistory()
                                        magic,
                                        EscapeJsonString(comment),
                                        IntegerToString(loginNum),
-                                       EscapeJsonString(AccountInfoString(ACCOUNT_COMPANY)),
-                                       EscapeJsonString(AccountInfoString(ACCOUNT_SERVER)),
-                                       AccountInfoString(ACCOUNT_CURRENCY));
+                                       EscapeJsonString(company),
+                                       EscapeJsonString(serverName),
+                                       currencyName);
 
       string response;
       string url = InpServerUrl + "/api/sync/trade";
@@ -408,16 +340,16 @@ void SyncAccountHistory()
       {
          MarkTicketAsSynced(targetTicket);
          uploadedCount++;
-         Print("[TradeTrackPro EA] 📜 Trade Uploaded: Ticket #", IntegerToString((long)targetTicket), " (", symbol, ")");
+         Print("[TradeTrackPro EA] Trade Uploaded: Ticket #", IntegerToString((long)targetTicket), " (", symbol, ")");
       }
    }
 
-   Print("[TradeTrackPro EA] 📜 History Trades Uploaded: ", IntegerToString(uploadedCount));
-   Print("[TradeTrackPro EA] 📜 Sync Complete");
+   Print("[TradeTrackPro EA] History Trades Uploaded: ", IntegerToString(uploadedCount));
+   Print("[TradeTrackPro EA] Sync Complete");
 }
 
 //+------------------------------------------------------------------+
-//| Scan and Sync Live Closed & Open Trades                           |
+//| Scan and Sync Live Closed Trades                                 |
 //+------------------------------------------------------------------+
 void ScanAndSyncClosedTrades()
 {
@@ -436,13 +368,10 @@ void ScanAndSyncClosedTrades()
       long dealType = HistoryDealGetInteger(dealTicket, DEAL_TYPE);
       if(dealType != DEAL_TYPE_BUY && dealType != DEAL_TYPE_SELL) continue;
 
-      ulong positionId = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+      ulong positionId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
       ulong targetTicket = (positionId > 0) ? positionId : dealTicket;
 
-      if(IsTicketAlreadySynced(targetTicket))
-      {
-         continue;
-      }
+      if(IsTicketAlreadySynced(targetTicket)) continue;
 
       string symbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
       double volume = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
@@ -461,7 +390,7 @@ void ScanAndSyncClosedTrades()
       for(int j = 0; j < totalDeals; j++)
       {
          ulong inTicket = HistoryDealGetTicket(j);
-         if(HistoryDealGetInteger(inTicket, DEAL_POSITION_ID) == positionId &&
+         if((ulong)HistoryDealGetInteger(inTicket, DEAL_POSITION_ID) == positionId &&
             (HistoryDealGetInteger(inTicket, DEAL_ENTRY) == DEAL_ENTRY_IN))
          {
             entryPrice = HistoryDealGetDouble(inTicket, DEAL_PRICE);
@@ -473,6 +402,9 @@ void ScanAndSyncClosedTrades()
       }
 
       long loginNum = (long)AccountInfoInteger(ACCOUNT_LOGIN);
+      string company = AccountInfoString(ACCOUNT_COMPANY);
+      string serverName = AccountInfoString(ACCOUNT_SERVER);
+      string currencyName = AccountInfoString(ACCOUNT_CURRENCY);
 
       string jsonPayload = StringFormat("{"
                                        "\"ticket\":\"%s\","
@@ -512,9 +444,9 @@ void ScanAndSyncClosedTrades()
                                        magic,
                                        EscapeJsonString(comment),
                                        IntegerToString(loginNum),
-                                       EscapeJsonString(AccountInfoString(ACCOUNT_COMPANY)),
-                                       EscapeJsonString(AccountInfoString(ACCOUNT_SERVER)),
-                                       AccountInfoString(ACCOUNT_CURRENCY));
+                                       EscapeJsonString(company),
+                                       EscapeJsonString(serverName),
+                                       currencyName);
 
       string response;
       string url = InpServerUrl + "/api/sync/trade";
@@ -526,7 +458,7 @@ void ScanAndSyncClosedTrades()
       else
       {
          MarkTicketAsSynced(targetTicket);
-         Print("[TradeTrackPro EA] ⚡ Trade Uploaded: Ticket #", IntegerToString((long)targetTicket), " (", symbol, ")");
+         Print("[TradeTrackPro EA] Trade Uploaded: Ticket #", IntegerToString((long)targetTicket), " (", symbol, ")");
       }
    }
 }
@@ -542,7 +474,7 @@ void QueueTradeLocally(string jsonPayload)
       FileSeek(fileHandle, 0, SEEK_END);
       FileWriteString(fileHandle, jsonPayload + "\r\n");
       FileClose(fileHandle);
-      Print("[TradeTrackPro EA] 💾 Trade queued offline");
+      Print("[TradeTrackPro EA] Trade queued offline");
    }
 }
 
@@ -577,7 +509,7 @@ void ProcessOfflineQueue()
       return;
    }
 
-   Print("[TradeTrackPro EA] 🔄 Retry Upload (", count, " pending trades)...");
+   Print("[TradeTrackPro EA] Retry Upload (", IntegerToString(count), " pending trades)...");
 
    string remainingLines[];
    int remainingCount = 0;
@@ -594,14 +526,14 @@ void ProcessOfflineQueue()
       }
       else
       {
-         Print("[TradeTrackPro EA] ✅ Retry Upload succeeded for queued trade!");
+         Print("[TradeTrackPro EA] Retry Upload succeeded for queued trade!");
       }
    }
 
    if(remainingCount == 0)
    {
       FileDelete(g_queueFilename);
-      Print("[TradeTrackPro EA] 🎉 All queued trades successfully processed!");
+      Print("[TradeTrackPro EA] All queued trades successfully processed!");
    }
    else
    {
@@ -614,6 +546,93 @@ void ProcessOfflineQueue()
          }
          FileClose(newFile);
       }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   Print("[TradeTrackPro EA] Initializing Real-Time Auto Sync EA v1.0.0...");
+
+   if(InpApiKey == "" || InpApiKey == "YOUR_API_KEY_HERE")
+   {
+      Alert("[TradeTrackPro EA] ERROR: Please enter your valid API Key in EA inputs!");
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+
+   // 1. Load Last Synced Ticket State from Terminal Storage / File
+   LoadSyncState();
+
+   // 2. Enable Timer for continuous sync retries and heartbeats (every 5s)
+   EventSetTimer(5);
+
+   // 3. Send Initial Heartbeat
+   SendHeartbeat();
+
+   // 4. Perform Initial Account History Sync (One-time on startup)
+   SyncAccountHistory();
+
+   Print("[TradeTrackPro EA] EA initialized successfully. Monitoring MT5 account #", IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)));
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   EventKillTimer();
+   SaveSyncState();
+   ArrayFree(g_syncedTickets);
+   Print("[TradeTrackPro EA] EA Deinitialized. Reason code: ", IntegerToString(reason));
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   ScanAndSyncClosedTrades();
+}
+
+//+------------------------------------------------------------------+
+//| Timer event function                                             |
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+   datetime now = TimeCurrent();
+
+   if(now - g_lastHeartbeat >= InpHeartbeatSec)
+   {
+      SendHeartbeat();
+      g_lastHeartbeat = now;
+   }
+
+   ProcessOfflineQueue();
+}
+
+//+------------------------------------------------------------------+
+//| Trade Transaction event                                          |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction& trans,
+                        const MqlTradeRequest& request,
+                        const MqlTradeResult& result)
+{
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
+   {
+      Print("[TradeTrackPro EA] Live Trade Detected: Deal #", IntegerToString((long)trans.deal));
+      ScanAndSyncClosedTrades();
+   }
+   else if(trans.type == TRADE_TRANSACTION_POSITION)
+   {
+      Print("[TradeTrackPro EA] Live Trade Detected: Position Modified #", IntegerToString((long)trans.position));
+      ScanAndSyncClosedTrades();
+   }
+   else if(trans.type == TRADE_TRANSACTION_ORDER_ADD)
+   {
+      Print("[TradeTrackPro EA] Live Trade Detected: Order Added #", IntegerToString((long)trans.order));
    }
 }
 //+------------------------------------------------------------------+
