@@ -27,6 +27,18 @@ app.use(
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
+// ── Root Endpoint ──
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: 'success',
+    name: 'TradeTrack Pro API Server',
+    version: '1.0.0',
+    documentation: '/api',
+    health: '/health',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // ── Health Check Endpoint ──
 app.get('/health', (req, res) => {
   res.status(200).json({
@@ -87,6 +99,7 @@ if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => {
     console.log(`
       🚀 TradeTrack Pro API Server running on port ${PORT}
+      🔗 Root Endpoint: http://localhost:${PORT}/
       🔗 Health Check: http://localhost:${PORT}/health
       🔑 Auth Endpoints: http://localhost:${PORT}/api/auth
       📈 Trade Endpoints: http://localhost:${PORT}/api/trades
