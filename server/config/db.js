@@ -15,79 +15,101 @@ if (fs.existsSync(serverEnvPath)) {
 }
 
 const { Pool } = require('pg');
-const { PGlite } = require('@electric-sql/pglite');
 
 let pool = null;
-let pgliteInstance = null;
 let dbType = 'none';
+
+const isProduction = process.env.NODE_ENV === 'production';
+const databaseUrl = process.env.DATABASE_URL;
 
 const initDb = async () => {
   if (dbType !== 'none') return;
 
-  const databaseUrl = process.env.DATABASE_URL;
+  console.log('[DB] ── Environment Audit ──');
+  console.log(`[DB] NODE_ENV     : ${process.env.NODE_ENV || 'not set (defaults to development)'}`);
+  console.log(`[DB] DATABASE_URL : ${databaseUrl ? '✓ Present (' + databaseUrl.split('@')[1]?.split('/')[0] + ')' : '✗ MISSING'}`);
 
+  // ── PRODUCTION: Strict PostgreSQL only, no fallback ──
+  if (isProduction) {
+    if (!databaseUrl) {
+      const msg = '[FATAL] DATABASE_URL is not set. Production requires PostgreSQL. Server cannot start.';
+      console.error(msg);
+      throw new Error(msg);
+    }
+
+    console.log('[DB] Production mode: connecting strictly to PostgreSQL...');
+    pool = new Pool({
+      connectionString: databaseUrl,
+      ssl: { rejectUnauthorized: false },
+      connectionTimeoutMillis: 10000,
+    });
+
+    const client = await pool.connect();
+    const info = await client.query('SELECT current_database() AS db, version()');
+    console.log(`[DB] ✅ Connected to PostgreSQL: "${info.rows[0].db}"`);
+    console.log(`[DB] Version: ${info.rows[0].version.split(',')[0]}`);
+    client.release();
+    dbType = 'pg';
+    return;
+  }
+
+  // ── DEVELOPMENT: Try PostgreSQL first, fallback to PGlite ──
   if (databaseUrl && !databaseUrl.startsWith('pglite')) {
-    console.log('[DB] Attempting connection to PostgreSQL Pool via DATABASE_URL...');
+    console.log('[DB] Dev mode: attempting PostgreSQL connection...');
     try {
       pool = new Pool({
         connectionString: databaseUrl,
-        ssl: databaseUrl.includes('neon.tech') || process.env.NODE_ENV === 'production'
-          ? { rejectUnauthorized: false }
-          : false,
-        connectionTimeoutMillis: 3000,
+        ssl: databaseUrl.includes('neon.tech') ? { rejectUnauthorized: false } : false,
+        connectionTimeoutMillis: 5000,
       });
-
       const client = await pool.connect();
-      console.log('[DB] ✅ Connected successfully to PostgreSQL Database Server');
+      console.log('[DB] ✅ Dev PostgreSQL connected');
       client.release();
       dbType = 'pg';
       return;
     } catch (err) {
-      console.error('[DB WARNING] Could not connect to external PostgreSQL server:', err.message);
-      console.log('[DB] Initializing embedded PostgreSQL 16 Engine (PGlite) for reliable local operation...');
+      console.warn('[DB] Dev PostgreSQL failed:', err.message);
+      console.log('[DB] Falling back to PGlite for local development...');
+      pool = null;
     }
   }
 
-  // Standalone PostgreSQL 16 engine using PGlite
-  console.log('[DB] Initializing embedded PostgreSQL 16 Engine (PGlite)...');
-  pgliteInstance = new PGlite();
+  // PGlite fallback — local dev only
+  const { PGlite } = require('@electric-sql/pglite');
+  const pglite = new PGlite();
+  // Wrap PGlite to match pg Pool interface
+  pool = {
+    query: async (text, params = []) => {
+      try {
+        const res = await pglite.query(text, params);
+        return { rows: res.rows || [] };
+      } catch (err) {
+        if (!params || params.length === 0) {
+          const res = await pglite.exec(text);
+          const last = Array.isArray(res) ? res[res.length - 1] : res;
+          return { rows: last?.rows || [] };
+        }
+        throw err;
+      }
+    },
+  };
   dbType = 'pglite';
-  console.log('[DB] ✅ Embedded PostgreSQL 16 Database initialized successfully');
+  console.log('[DB] ✅ PGlite initialized for local dev');
 };
 
 const query = async (text, params = []) => {
   if (dbType === 'none') {
     await initDb();
   }
-
-  if (dbType === 'pg' && pool) {
-    return pool.query(text, params);
+  if (!pool) {
+    throw new Error('[DB] No database connection available');
   }
-
-  if (dbType === 'pglite' && pgliteInstance) {
-    try {
-      const res = await pgliteInstance.query(text, params);
-      return { rows: res.rows || [] };
-    } catch (err) {
-      if (!params || params.length === 0) {
-        const res = await pgliteInstance.exec(text);
-        const lastResult = Array.isArray(res) ? res[res.length - 1] : res;
-        return { rows: lastResult?.rows || [] };
-      }
-      throw err;
-    }
-  }
-
-  throw new Error('[DB ERROR] PostgreSQL database connection unavailable');
+  return pool.query(text, params);
 };
 
 module.exports = {
   query,
-  get pool() {
-    return pool;
-  },
-  get dbType() {
-    return dbType;
-  },
+  get pool() { return pool; },
+  get dbType() { return dbType; },
   initDb,
 };

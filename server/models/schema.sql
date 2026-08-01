@@ -2,25 +2,14 @@
 -- TradeTrack Pro — Complete PostgreSQL Database Schema
 -- Production-grade schema with Primary Keys, Foreign Keys, Indexes,
 -- Check Constraints, Unique Constraints.
+-- Uses CREATE TABLE IF NOT EXISTS to preserve existing data.
 -- ====================================================================
-
--- ── Drop Existing Tables (Cascade for clean setup) ──
-DROP TABLE IF EXISTS trade_sync_history CASCADE;
-DROP TABLE IF EXISTS sync_logs CASCADE;
-DROP TABLE IF EXISTS sync_sessions CASCADE;
-DROP TABLE IF EXISTS broker_accounts CASCADE;
-DROP TABLE IF EXISTS trade_screenshots CASCADE;
-DROP TABLE IF EXISTS trades CASCADE;
-DROP TABLE IF EXISTS psychology_journal CASCADE;
-DROP TABLE IF EXISTS accounts CASCADE;
-DROP TABLE IF EXISTS sessions CASCADE;
-DROP TABLE IF EXISTS users CASCADE;
 
 -- ====================================================================
 -- 1. USERS TABLE
 -- Stores authenticated trader credentials and user profiles
 -- ====================================================================
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email VARCHAR(255) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
@@ -39,7 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at);
 -- 2. ACCOUNTS TABLE
 -- Supports Prop Firm, Live, Demo, and Challenge trading accounts
 -- ====================================================================
-CREATE TABLE accounts (
+CREATE TABLE IF NOT EXISTS accounts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   account_name VARCHAR(100) NOT NULL,
@@ -64,10 +53,10 @@ CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);
 -- 3. SESSIONS TABLE
 -- Stores JWT authentication sessions & refresh tokens
 -- ====================================================================
-CREATE TABLE sessions (
+CREATE TABLE IF NOT EXISTS sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token_hash VARCHAR(255) NOT NULL UNIQUE,
+  token_hash VARCHAR(512) NOT NULL,
   user_agent TEXT,
   ip_address VARCHAR(45),
   expires_at TIMESTAMPTZ NOT NULL,
@@ -82,7 +71,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
 -- 4. TRADES TABLE
 -- Core table storing detailed trade executions, asset classes, and metrics
 -- ====================================================================
-CREATE TABLE trades (
+CREATE TABLE IF NOT EXISTS trades (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
@@ -134,7 +123,7 @@ CREATE INDEX IF NOT EXISTS idx_trades_setup_tag ON trades(setup_tag);
 -- 5. TRADE SCREENSHOTS TABLE
 -- Chart screenshots uploaded to Cloudinary associated with trades
 -- ====================================================================
-CREATE TABLE trade_screenshots (
+CREATE TABLE IF NOT EXISTS trade_screenshots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   trade_id UUID NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
   url TEXT NOT NULL,
@@ -150,7 +139,7 @@ CREATE INDEX IF NOT EXISTS idx_trade_screenshots_trade_id ON trade_screenshots(t
 -- 6. PSYCHOLOGY JOURNAL TABLE
 -- Daily psychological tracking, pre/post market notes, and discipline scores
 -- ====================================================================
-CREATE TABLE psychology_journal (
+CREATE TABLE IF NOT EXISTS psychology_journal (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   journal_date DATE NOT NULL,
@@ -172,7 +161,7 @@ CREATE INDEX IF NOT EXISTS idx_psychology_date ON psychology_journal(journal_dat
 -- 7. BROKER ACCOUNTS TABLE (MT5 REAL-TIME AUTO SYNC)
 -- Stores API keys, connected MT5 account details, server, & heartbeat
 -- ====================================================================
-CREATE TABLE broker_accounts (
+CREATE TABLE IF NOT EXISTS broker_accounts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   api_key VARCHAR(255) NOT NULL UNIQUE,
@@ -196,7 +185,7 @@ CREATE INDEX IF NOT EXISTS idx_broker_accounts_api_key ON broker_accounts(api_ke
 -- 8. SYNC SESSIONS TABLE
 -- Tracks active EA connection sessions & terminal IP addresses
 -- ====================================================================
-CREATE TABLE sync_sessions (
+CREATE TABLE IF NOT EXISTS sync_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   broker_account_id UUID NOT NULL REFERENCES broker_accounts(id) ON DELETE CASCADE,
   session_token VARCHAR(255) NOT NULL UNIQUE,
@@ -212,7 +201,7 @@ CREATE INDEX IF NOT EXISTS idx_sync_sessions_account_id ON sync_sessions(broker_
 -- 9. SYNC LOGS TABLE
 -- Audit log of EA events (Connection, Heartbeat, Trade Receipt, Duplicate Ignored)
 -- ====================================================================
-CREATE TABLE sync_logs (
+CREATE TABLE IF NOT EXISTS sync_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   broker_account_id UUID REFERENCES broker_accounts(id) ON DELETE SET NULL,
   event_type VARCHAR(50) NOT NULL,
@@ -228,7 +217,7 @@ CREATE INDEX IF NOT EXISTS idx_sync_logs_event_type ON sync_logs(event_type);
 -- 10. TRADE SYNC HISTORY TABLE (DUPLICATE PROTECTION)
 -- Uniqueness constraint ensuring ticket + account_number + broker is unique
 -- ====================================================================
-CREATE TABLE trade_sync_history (
+CREATE TABLE IF NOT EXISTS trade_sync_history (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   broker_account_id UUID NOT NULL REFERENCES broker_accounts(id) ON DELETE CASCADE,
   ticket VARCHAR(100) NOT NULL,

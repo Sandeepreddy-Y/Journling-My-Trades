@@ -30,10 +30,21 @@ const uploadRoutes = require('./routes/uploadRoutes');
 const strategyRoutes = require('./routes/strategyRoutes');
 const syncRoutes = require('./routes/syncRoutes');
 const rateLimiter = require('./middleware/rateLimiter');
-const { query, initDb } = require('./config/db');
+const { query, initDb, dbType } = require('./config/db');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// ── Environment Variable Audit (runs on startup) ──
+console.log('\n========================================');
+console.log('🔍 ENVIRONMENT VARIABLE AUDIT');
+console.log('========================================');
+console.log(`NODE_ENV     : ${process.env.NODE_ENV || 'not set'}`);
+console.log(`PORT         : ${PORT}`);
+console.log(`DATABASE_URL : ${process.env.DATABASE_URL ? '✓ Present' : '✗ MISSING'}`);
+console.log(`JWT_SECRET   : ${process.env.JWT_SECRET ? '✓ Present' : '✗ MISSING'}`);
+console.log(`CLIENT_URL   : ${process.env.CLIENT_URL || '✗ not set'}`);
+console.log('========================================\n');
 
 // Create HTTP Server & Attach Socket.IO
 const server = http.createServer(app);
@@ -57,7 +68,7 @@ io.on('connection', (socket) => {
 app.use(helmet());
 app.use(morgan('dev'));
 
-// ── CORS — allow both local dev and deployed frontend ──
+// ── CORS — allow localhost, vercel.app, and CLIENT_URL ──
 const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
@@ -67,11 +78,13 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
+      // Allow requests with no origin (server-to-server, curl, mobile apps)
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin) || origin.includes('vercel.app')) {
+      if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
         return callback(null, true);
       }
-      return callback(null, true);
+      console.warn('[CORS] Blocked origin:', origin);
+      return callback(null, false);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -79,6 +92,7 @@ app.use(
   })
 );
 
+// Explicit preflight handler
 app.options('*', cors());
 
 app.use(cookieParser());
@@ -157,32 +171,45 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ── Auto-Initialize Database Tables ──
+// ── Initialize Database & Start Server ──
 const initializeDatabase = async () => {
+  // This will throw in production if DATABASE_URL is missing or connection fails
+  await initDb();
+
+  // Run schema (CREATE TABLE IF NOT EXISTS — safe to run repeatedly)
+  const schemaSql = fs.readFileSync(path.resolve(__dirname, './models/schema.sql'), 'utf8');
+  await query(schemaSql);
+  console.log('[DB] ✅ Schema tables verified/created.');
+
+  // Verify users table
   try {
-    await initDb();
-    const schemaSql = fs.readFileSync(path.resolve(__dirname, './models/schema.sql'), 'utf8');
-    await query(schemaSql);
-    console.log('[DB] ✅ Database tables verified/created successfully in PostgreSQL.');
-  } catch (error) {
-    console.error('[DB] ⚠️ Table initialization error:', error.message);
+    const check = await query('SELECT COUNT(*) as count FROM users');
+    console.log(`[DB] ✅ Users table verified. Current user count: ${check.rows[0].count}`);
+  } catch (err) {
+    console.error('[DB] ❌ Users table check failed:', err.message);
+    throw err;
   }
 };
 
 // ── Start Server ──
 if (process.env.NODE_ENV !== 'test') {
-  initializeDatabase().then(() => {
-    server.listen(PORT, () => {
-      console.log(`
+  initializeDatabase()
+    .then(() => {
+      server.listen(PORT, () => {
+        console.log(`
       🚀 TradeTrack Pro API Server running on port ${PORT}
       🔗 Root: http://localhost:${PORT}/
       🔑 Auth: http://localhost:${PORT}/api/auth
       📈 Trades: http://localhost:${PORT}/api/trades
       ⚡ Sync: http://localhost:${PORT}/api/sync
-      🗄️  Database: PostgreSQL
-      `);
+      🗄️  Database: PostgreSQL (strict mode)
+        `);
+      });
+    })
+    .catch((err) => {
+      console.error('[FATAL] Server startup failed:', err.message);
+      process.exit(1);
     });
-  });
 }
 
 module.exports = app;
